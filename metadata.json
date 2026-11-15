@@ -1,0 +1,6 @@
+{
+  "name": "Focus To-Do",
+  "description": "Pomodoro Timer & To-Do List with full Arabic RTL/English support, Forest gamification, white noise synthesizer, and analytics reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
