@@ -4,8 +4,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,11 +21,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.AlarmOn
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.SettingsApplications
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -47,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -54,9 +67,13 @@ import androidx.compose.ui.unit.dp
 import com.example.i18n.Strings
 import com.example.model.AppLanguage
 import com.example.model.AppSettings
+import com.example.notifications.SystemPermissionsHelper
 import com.example.ui.theme.CoralPrimary
 import com.example.ui.theme.ForestEmerald
 import com.example.ui.theme.JetBrainsMonoFontFamily
+import com.example.ui.theme.PriorityHighColor
+import com.example.ui.theme.PriorityLowColor
+import com.example.ui.theme.SunlightGold
 import com.example.viewmodel.MainUiState
 import kotlin.math.roundToInt
 
@@ -66,6 +83,8 @@ fun SettingsDialog(
     s: Strings,
     onDismiss: () -> Unit,
     onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
+    onRequestPermissions: () -> Unit,
+    onOpenBackgroundPermissionsModal: () -> Unit,
     onExportJson: () -> String,
     onImportJson: (String) -> Boolean,
     onResetDemoData: () -> Unit
@@ -74,6 +93,7 @@ fun SettingsDialog(
 
     val context = LocalContext.current
     val settings = uiState.data.settings
+    val permSnapshot = uiState.systemPermissions
     var backupFeedback by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -143,7 +163,109 @@ fun SettingsDialog(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Pomodoro Durations
+                // 1. Notifications & Background Permissions Section (الإشعارات وأذونات الخلفية)
+                item {
+                    SettingsSectionCard(title = s.notificationsAndPermissionsSection) {
+                        SettingsSwitchWithSubtitleRow(
+                            label = s.enableTaskRemindersLabel,
+                            subtitle = s.enableTaskRemindersDesc,
+                            checked = settings.enableTaskReminders,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings { it.copy(enableTaskReminders = enabled) }
+                            },
+                            testTag = "toggle_task_reminders"
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        SettingsSwitchWithSubtitleRow(
+                            label = s.persistentTimerNotificationLabel,
+                            subtitle = s.persistentTimerNotificationDesc,
+                            checked = settings.persistentTimerNotification,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings { it.copy(persistentTimerNotification = enabled) }
+                            },
+                            testTag = "toggle_persistent_timer_notification"
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        SettingsSwitchWithSubtitleRow(
+                            label = s.alarmSoundAndVibrationLabel,
+                            subtitle = s.alarmSoundAndVibrationDesc,
+                            checked = settings.alarmSoundAndVibration && settings.alarmEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings {
+                                    it.copy(alarmSoundAndVibration = enabled, alarmEnabled = enabled)
+                                }
+                            },
+                            testTag = "toggle_alarm_sound_vibration"
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        // System Permissions Status & Direct Shortcuts
+                        Text(
+                            text = s.systemPermissionsStatusLabel,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+
+                        PermissionStatusRow(
+                            label = s.notificationsPermissionLabel,
+                            isGranted = permSnapshot.notificationsGranted,
+                            s = s,
+                            onClick = {
+                                if (!permSnapshot.notificationsGranted) {
+                                    onRequestPermissions()
+                                    SystemPermissionsHelper.openAppNotificationSettings(context)
+                                } else {
+                                    SystemPermissionsHelper.openAppNotificationSettings(context)
+                                }
+                            }
+                        )
+
+                        PermissionStatusRow(
+                            label = s.exactAlarmsPermissionLabel,
+                            isGranted = permSnapshot.exactAlarmsGranted,
+                            s = s,
+                            onClick = {
+                                SystemPermissionsHelper.openExactAlarmSettings(context)
+                            }
+                        )
+
+                        PermissionStatusRow(
+                            label = s.batteryUnrestrictedLabel,
+                            isGranted = permSnapshot.ignoringBatteryOptimizations,
+                            s = s,
+                            onClick = {
+                                SystemPermissionsHelper.openIgnoreBatteryOptimizations(context)
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Button(
+                            onClick = onOpenBackgroundPermissionsModal,
+                            colors = ButtonDefaults.buttonColors(containerColor = CoralPrimary),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("open_background_permissions_button")
+                        ) {
+                            Icon(Icons.Default.Security, null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = s.openBackgroundPermissionsButton,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                // 2. Pomodoro Durations
                 item {
                     SettingsSectionCard(title = s.pomodoroSettings) {
                         SettingsSliderRow(
@@ -177,7 +299,7 @@ fun SettingsDialog(
                     }
                 }
 
-                // Automation Toggles
+                // 3. Automation Toggles
                 item {
                     SettingsSectionCard(title = s.automation) {
                         SettingsSwitchRow(
@@ -198,13 +320,15 @@ fun SettingsDialog(
                     }
                 }
 
-                // Sound & Appearance
+                // 4. Sound & Appearance
                 item {
                     SettingsSectionCard(title = s.soundAndAppearance) {
                         SettingsSwitchRow(
                             label = s.alarmSound,
-                            checked = settings.alarmEnabled,
-                            onCheckedChange = { c -> onUpdateSettings { it.copy(alarmEnabled = c) } }
+                            checked = settings.alarmEnabled && settings.alarmSoundAndVibration,
+                            onCheckedChange = { c ->
+                                onUpdateSettings { it.copy(alarmEnabled = c, alarmSoundAndVibration = c) }
+                            }
                         )
                         SettingsSwitchRow(
                             label = s.darkMode,
@@ -245,7 +369,7 @@ fun SettingsDialog(
                     }
                 }
 
-                // JSON Export/Import & Reset Demo Data
+                // 5. JSON Export/Import & Reset Demo Data
                 item {
                     SettingsSectionCard(title = s.dataBackup) {
                         Row(
@@ -300,6 +424,329 @@ fun SettingsDialog(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun BackgroundTimerPermissionsDialog(
+    uiState: MainUiState,
+    s: Strings,
+    onDismiss: () -> Unit,
+    onToggleLockedInRecents: (Boolean) -> Unit
+) {
+    BackHandler { onDismiss() }
+
+    val context = LocalContext.current
+    val settings = uiState.data.settings
+    val perms = uiState.systemPermissions
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Security, null, tint = CoralPrimary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = s.backgroundTimerPermissionsTitle,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.testTag("close_background_permissions_button")
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = s.cancel)
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    Text(
+                        text = s.backgroundTimerPermissionsSubtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Card 1: Ignore battery optimization
+                item {
+                    BackgroundPermissionActionCard(
+                        icon = Icons.Default.BatteryChargingFull,
+                        iconTint = ForestEmerald,
+                        title = s.cardIgnoreBatteryTitle,
+                        description = s.cardIgnoreBatteryDesc,
+                        statusText = if (perms.ignoringBatteryOptimizations) s.statusEnabledBadge else s.statusDisabledBadge,
+                        statusEnabled = perms.ignoringBatteryOptimizations,
+                        actionLabel = s.openSystemSettingAction,
+                        onClick = { SystemPermissionsHelper.openIgnoreBatteryOptimizations(context) },
+                        testTag = "card_ignore_battery_optimization"
+                    )
+                }
+
+                // Card 2: Allow auto-startup (OEM Auto-Start with Transsion/Infinix XOS support)
+                item {
+                    BackgroundPermissionActionCard(
+                        icon = Icons.Default.PlayCircleOutline,
+                        iconTint = PriorityLowColor,
+                        title = s.cardAllowAutoStartTitle,
+                        description = s.cardAllowAutoStartDesc,
+                        statusText = null,
+                        statusEnabled = false,
+                        actionLabel = s.openSystemSettingAction,
+                        onClick = { SystemPermissionsHelper.openAutoStartSettings(context) },
+                        testTag = "card_allow_auto_startup"
+                    )
+                }
+
+                // Card 3: Ensure running in background
+                item {
+                    BackgroundPermissionActionCard(
+                        icon = Icons.Default.SettingsApplications,
+                        iconTint = SunlightGold,
+                        title = s.cardEnsureBackgroundTitle,
+                        description = s.cardEnsureBackgroundDesc,
+                        statusText = null,
+                        statusEnabled = false,
+                        actionLabel = s.openSystemSettingAction,
+                        onClick = { SystemPermissionsHelper.openAppDetailsSettings(context) },
+                        testTag = "card_ensure_running_background"
+                    )
+                }
+
+                // Card 4: Turn off Power Saving Mode
+                item {
+                    BackgroundPermissionActionCard(
+                        icon = Icons.Default.BatterySaver,
+                        iconTint = CoralPrimary,
+                        title = s.cardTurnOffPowerSaverTitle,
+                        description = s.cardTurnOffPowerSaverDesc,
+                        statusText = null,
+                        statusEnabled = false,
+                        actionLabel = s.openSystemSettingAction,
+                        onClick = { SystemPermissionsHelper.openBatterySaverSettings(context) },
+                        testTag = "card_turn_off_power_saver"
+                    )
+                }
+
+                // Card 5: Lock in recent apps (Interactive Confirmed / تم التثبيت toggle)
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(
+                            1.dp,
+                            if (settings.lockedInRecentsConfirmed) ForestEmerald else MaterialTheme.colorScheme.outlineVariant
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onToggleLockedInRecents(!settings.lockedInRecentsConfirmed) }
+                            .testTag("card_lock_in_recent_apps")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background( ForestEmerald.copy(alpha = 0.14f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Lock, null, tint = ForestEmerald)
+                                }
+                                Text(
+                                    text = s.cardLockInRecentsTitle,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            Text(
+                                text = s.cardLockInRecentsDesc,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = s.confirmedLockedLabel,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = if (settings.lockedInRecentsConfirmed) ForestEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Switch(
+                                    checked = settings.lockedInRecentsConfirmed,
+                                    onCheckedChange = onToggleLockedInRecents,
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.White,
+                                        checkedTrackColor = ForestEmerald
+                                    ),
+                                    modifier = Modifier.testTag("toggle_lock_in_recents_confirmed")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BackgroundPermissionActionCard(
+    icon: ImageVector,
+    iconTint: Color,
+    title: String,
+    description: String,
+    statusText: String?,
+    statusEnabled: Boolean,
+    actionLabel: String,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(iconTint.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, null, tint = iconTint)
+                }
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (statusText != null) {
+                    StatusBadgePill(text = statusText, enabled = statusEnabled)
+                }
+            }
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = actionLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = CoralPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                    contentDescription = null,
+                    tint = CoralPrimary,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionStatusRow(
+    label: String,
+    isGranted: Boolean,
+    s: Strings,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+            )
+            StatusBadgePill(
+                text = if (isGranted) s.statusEnabledBadge else s.statusDisabledBadge,
+                enabled = isGranted
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusBadgePill(
+    text: String,
+    enabled: Boolean
+) {
+    val color = if (enabled) ForestEmerald else PriorityHighColor
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = color.copy(alpha = 0.16f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.5f))
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
     }
 }
 
@@ -379,6 +826,42 @@ private fun SettingsSwitchRow(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = CoralPrimary)
+        )
+    }
+}
+
+@Composable
+private fun SettingsSwitchWithSubtitleRow(
+    label: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    testTag: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = CoralPrimary),
+            modifier = Modifier.testTag(testTag)
         )
     }
 }

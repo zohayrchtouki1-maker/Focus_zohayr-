@@ -12,7 +12,7 @@ import com.example.model.AppLanguage
 import com.example.model.AppSettings
 import com.example.model.FocusRecord
 import com.example.model.FolderItem
-import com.example.model.ForestState
+import com.example.model.PersistedTimerState
 import com.example.model.PlantSpecies
 import com.example.model.PlantedTree
 import com.example.model.ProjectItem
@@ -26,6 +26,12 @@ import com.example.model.TaskSortOption
 import com.example.model.TimerCountMode
 import com.example.model.TimerPhase
 import com.example.model.WhiteNoiseType
+import com.example.notifications.ExternalNotificationEvent
+import com.example.notifications.FocusNotificationBus
+import com.example.notifications.FocusNotificationManager
+import com.example.notifications.SystemPermissionSnapshot
+import com.example.notifications.SystemPermissionsHelper
+import com.example.ui.components.formatSecondsMmSs
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +41,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
+import kotlin.math.ceil
+import kotlin.math.max
 
 sealed class NavDestination {
     data class SmartList(val type: SmartListType) : NavDestination()
@@ -52,6 +60,8 @@ data class TimerUiState(
     val totalPhaseSeconds: Int = 25 * 60,
     val remainingSeconds: Int = 25 * 60,
     val stopwatchSeconds: Int = 0,
+    val timerEndTimeEpochMillis: Long? = null,
+    val stopwatchStartTimeEpochMillis: Long? = null,
     val cycleCount: Int = 0
 )
 
@@ -66,12 +76,16 @@ data class MainUiState(
     val showReports: Boolean = false,
     val showForest: Boolean = false,
     val showSettings: Boolean = false,
+    val showBackgroundPermissionsModal: Boolean = false,
     val timer: TimerUiState = TimerUiState(),
+    val systemPermissions: SystemPermissionSnapshot = SystemPermissionSnapshot(),
+    val permissionRequestTrigger: Int = 0,
     val statusBannerMessage: String? = null
 )
 
 class FocusTodoViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = FocusRepository(application.applicationContext)
+    private val appContext = application.applicationContext
+    private val repository = FocusRepository(appContext)
     private val soundSynthesizer = SoundSynthesizer()
 
     private val _uiState = MutableStateFlow(MainUiState())
@@ -80,30 +94,139 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     private var timerJob: Job? = null
 
     init {
+        FocusNotificationManager.ensureChannelsCreated(appContext)
+
         viewModelScope.launch {
             val loaded = repository.loadState()
             val defaultFocusSecs = loaded.settings.pomodoroMinutes * 60
+            val restoredTimer = restorePersistedTimer(loaded.persistedTimer, defaultFocusSecs)
+            val permSnapshot = SystemPermissionsHelper.getSnapshot(appContext)
+            val shouldPromptOnLaunch = !permSnapshot.notificationsGranted
+
             _uiState.update {
                 it.copy(
                     isLoaded = true,
                     data = loaded,
-                    timer = it.timer.copy(
-                        totalPhaseSeconds = defaultFocusSecs,
-                        remainingSeconds = defaultFocusSecs
-                    )
+                    timer = restoredTimer,
+                    systemPermissions = permSnapshot,
+                    permissionRequestTrigger = if (shouldPromptOnLaunch) it.permissionRequestTrigger + 1 else it.permissionRequestTrigger
                 )
+            }
+
+            // Re-verify and schedule all upcoming task reminder alarms on app startup
+            FocusNotificationManager.syncAllTaskReminders(
+                context = appContext,
+                tasks = loaded.tasks,
+                settings = loaded.settings
+            )
+
+            // If restored timer was running, resume ticker or complete if expired
+            if (restoredTimer.isRunning) {
+                reconcileRunningTimerWithTimestamp()
+                if (_uiState.value.timer.isRunning) {
+                    startTimerTicker()
+                }
+            }
+        }
+
+        // Listen for status-bar notification action button broadcasts
+        viewModelScope.launch {
+            FocusNotificationBus.events.collect { event ->
+                when (event) {
+                    is ExternalNotificationEvent.PauseTimer -> pauseTimer()
+                    is ExternalNotificationEvent.StopTimer -> stopOrAbandonTimer()
+                    is ExternalNotificationEvent.TimerCompletedInBackground -> {
+                        reconcileRunningTimerWithTimestamp()
+                    }
+                    is ExternalNotificationEvent.CompleteTaskFromNotification -> {
+                        val task = _uiState.value.data.tasks.find { it.id == event.taskId }
+                        if (task != null && !task.isCompleted) {
+                            toggleTaskCompleted(event.taskId)
+                        }
+                    }
+                }
             }
         }
     }
 
+    private fun restorePersistedTimer(
+        persisted: PersistedTimerState?,
+        defaultFocusSecs: Int
+    ): TimerUiState {
+        if (persisted == null) {
+            return TimerUiState(
+                totalPhaseSeconds = defaultFocusSecs,
+                remainingSeconds = defaultFocusSecs
+            )
+        }
+        return TimerUiState(
+            activeTaskId = persisted.activeTaskId,
+            phase = persisted.phase,
+            countMode = persisted.countMode,
+            isRunning = persisted.isRunning,
+            hasStarted = persisted.hasStarted,
+            strictMode = persisted.strictMode,
+            totalPhaseSeconds = persisted.totalPhaseSeconds,
+            remainingSeconds = persisted.remainingSeconds,
+            stopwatchSeconds = persisted.stopwatchSeconds,
+            timerEndTimeEpochMillis = persisted.timerEndTimeEpochMillis,
+            stopwatchStartTimeEpochMillis = persisted.stopwatchStartTimeEpochMillis,
+            cycleCount = persisted.cycleCount
+        )
+    }
+
+    private fun TimerUiState.toPersisted(): PersistedTimerState = PersistedTimerState(
+        activeTaskId = activeTaskId,
+        phase = phase,
+        countMode = countMode,
+        isRunning = isRunning,
+        hasStarted = hasStarted,
+        strictMode = strictMode,
+        totalPhaseSeconds = totalPhaseSeconds,
+        remainingSeconds = remainingSeconds,
+        stopwatchSeconds = stopwatchSeconds,
+        timerEndTimeEpochMillis = timerEndTimeEpochMillis,
+        stopwatchStartTimeEpochMillis = stopwatchStartTimeEpochMillis,
+        cycleCount = cycleCount
+    )
+
     private fun commitData(transform: (AppBackupState) -> AppBackupState) {
         _uiState.update { state ->
-            val nextData = transform(state.data)
+            val nextData = transform(state.data).copy(
+                persistedTimer = state.timer.toPersisted()
+            )
             viewModelScope.launch {
                 repository.saveState(nextData)
             }
             state.copy(data = nextData)
         }
+    }
+
+    private fun saveCurrentTimerToStorage() {
+        val state = _uiState.value
+        val nextData = state.data.copy(persistedTimer = state.timer.toPersisted())
+        _uiState.update { it.copy(data = nextData) }
+        viewModelScope.launch {
+            repository.saveState(nextData)
+        }
+    }
+
+    fun refreshSystemPermissions() {
+        val snapshot = SystemPermissionsHelper.getSnapshot(appContext)
+        _uiState.update { it.copy(systemPermissions = snapshot) }
+    }
+
+    fun requestNativePermissionsIfMissing() {
+        refreshSystemPermissions()
+        val snap = _uiState.value.systemPermissions
+        if (!snap.notificationsGranted) {
+            _uiState.update { it.copy(permissionRequestTrigger = it.permissionRequestTrigger + 1) }
+        }
+    }
+
+    fun onAppResumed() {
+        refreshSystemPermissions()
+        reconcileRunningTimerWithTimestamp()
     }
 
     fun selectDestination(dest: NavDestination) {
@@ -135,14 +258,20 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun setShowSettings(show: Boolean) {
+        if (show) refreshSystemPermissions()
         _uiState.update { it.copy(showSettings = show) }
+    }
+
+    fun setShowBackgroundPermissionsModal(show: Boolean) {
+        if (show) refreshSystemPermissions()
+        _uiState.update { it.copy(showBackgroundPermissionsModal = show) }
     }
 
     fun clearStatusBanner() {
         _uiState.update { it.copy(statusBannerMessage = null) }
     }
 
-    // --- Task CRUD ---
+    // --- Task CRUD & Exact Reminder Scheduling ---
 
     fun addTask(
         title: String,
@@ -170,14 +299,17 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         commitData { data ->
             data.copy(tasks = listOf(task) + data.tasks)
         }
+        FocusNotificationManager.scheduleTaskReminder(appContext, task, _uiState.value.data.settings)
     }
 
     fun toggleTaskCompleted(taskId: String) {
         val task = _uiState.value.data.tasks.find { it.id == taskId } ?: return
         val newCompleted = !task.isCompleted
-        if (newCompleted) {
+        if (newCompleted && _uiState.value.data.settings.alarmSoundAndVibration) {
             soundSynthesizer.playCheckSound()
         }
+
+        var newlyCreatedRecurringTask: TaskItem? = null
 
         commitData { data ->
             val updatedList = data.tasks.map { item ->
@@ -189,7 +321,6 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 } else item
             }.toMutableList()
 
-            // If completing a recurring task, automatically schedule the next occurrence
             if (newCompleted && task.recurrence != RecurrenceRule.NONE) {
                 val baseDay = task.dueDateEpochDay ?: DateUtils.todayEpochDay()
                 val nextDay = when (task.recurrence) {
@@ -198,34 +329,56 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     RecurrenceRule.MONTHLY -> baseDay + 30
                     RecurrenceRule.NONE -> baseDay
                 }
-                updatedList.add(
-                    0,
-                    task.copy(
-                        id = UUID.randomUUID().toString(),
-                        dueDateEpochDay = nextDay,
-                        completedPomodoros = 0,
-                        elapsedFocusMinutes = 0,
-                        isCompleted = false,
-                        completedAtEpochMillis = null,
-                        subtasks = task.subtasks.map { it.copy(id = UUID.randomUUID().toString(), isDone = false) },
-                        createdAtEpochMillis = System.currentTimeMillis()
-                    )
+                val nextTask = task.copy(
+                    id = UUID.randomUUID().toString(),
+                    dueDateEpochDay = nextDay,
+                    completedPomodoros = 0,
+                    elapsedFocusMinutes = 0,
+                    isCompleted = false,
+                    completedAtEpochMillis = null,
+                    subtasks = task.subtasks.map { it.copy(id = UUID.randomUUID().toString(), isDone = false) },
+                    createdAtEpochMillis = System.currentTimeMillis()
                 )
+                newlyCreatedRecurringTask = nextTask
+                updatedList.add(0, nextTask)
             }
 
             data.copy(tasks = updatedList)
         }
+
+        val settings = _uiState.value.data.settings
+        if (newCompleted) {
+            FocusNotificationManager.cancelTaskReminder(appContext, taskId)
+            newlyCreatedRecurringTask?.let {
+                FocusNotificationManager.scheduleTaskReminder(appContext, it, settings)
+            }
+        } else {
+            val updatedTask = _uiState.value.data.tasks.find { it.id == taskId }
+            if (updatedTask != null) {
+                FocusNotificationManager.scheduleTaskReminder(appContext, updatedTask, settings)
+            }
+        }
     }
 
     fun updateTask(taskId: String, transform: (TaskItem) -> TaskItem) {
+        val previousTask = _uiState.value.data.tasks.find { it.id == taskId }
         commitData { data ->
             data.copy(
                 tasks = data.tasks.map { if (it.id == taskId) transform(it) else it }
             )
         }
+        val updatedTask = _uiState.value.data.tasks.find { it.id == taskId } ?: return
+        val settings = _uiState.value.data.settings
+
+        // If user just set or changed a reminder time, prompt for notification/exact alarm permissions if missing
+        if (updatedTask.reminderTime != null && updatedTask.reminderTime != previousTask?.reminderTime) {
+            requestNativePermissionsIfMissing()
+        }
+        FocusNotificationManager.scheduleTaskReminder(appContext, updatedTask, settings)
     }
 
     fun deleteTask(taskId: String) {
+        FocusNotificationManager.cancelTaskReminder(appContext, taskId)
         commitData { data ->
             data.copy(tasks = data.tasks.filterNot { it.id == taskId })
         }
@@ -376,7 +529,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    // --- Pomodoro Timer Engine ---
+    // --- Drift-Free Pomodoro Timer Engine ---
 
     private fun getFocusDurationSeconds(taskId: String?, settings: AppSettings): Int {
         val task = _uiState.value.data.tasks.find { it.id == taskId }
@@ -384,9 +537,20 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         return mins.coerceIn(1, 120) * 60
     }
 
+    private fun activeTaskOrDefaultTitle(): String {
+        val state = _uiState.value
+        val task = state.data.tasks.find { it.id == state.timer.activeTaskId }
+        if (task != null) return task.title
+        return if (state.data.settings.language == AppLanguage.AR) "تركيز حر" else "Free Focus"
+    }
+
     fun startFocusForTask(taskId: String?, openFullScreen: Boolean = true) {
+        requestNativePermissionsIfMissing()
         val settings = _uiState.value.data.settings
         val focusSecs = getFocusDurationSeconds(taskId, settings)
+        val now = System.currentTimeMillis()
+        val endTime = now + focusSecs * 1000L
+
         _uiState.update { state ->
             state.copy(
                 showFullScreenTimer = openFullScreen,
@@ -396,19 +560,24 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     totalPhaseSeconds = focusSecs,
                     remainingSeconds = focusSecs,
                     stopwatchSeconds = 0,
+                    timerEndTimeEpochMillis = endTime,
+                    stopwatchStartTimeEpochMillis = now,
                     isRunning = true,
                     hasStarted = true
                 )
             )
         }
+        saveCurrentTimerToStorage()
+        syncRunningTimerNotificationsAndAlarms()
         startTimerTicker()
     }
 
     fun selectActiveFocusTask(taskId: String?) {
         val state = _uiState.value
         if (state.timer.isRunning && state.timer.phase == TimerPhase.FOCUS) {
-            // Switch task cleanly without losing running timer
             _uiState.update { it.copy(timer = it.timer.copy(activeTaskId = taskId)) }
+            saveCurrentTimerToStorage()
+            syncRunningTimerNotificationsAndAlarms()
         } else {
             val focusSecs = getFocusDurationSeconds(taskId, state.data.settings)
             _uiState.update {
@@ -421,24 +590,49 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 )
             }
+            saveCurrentTimerToStorage()
         }
     }
 
     fun startOrResumeTimer() {
+        requestNativePermissionsIfMissing()
+        val now = System.currentTimeMillis()
         _uiState.update { state ->
+            val t = state.timer
+            val endTime = now + t.remainingSeconds * 1000L
+            val swStart = now - t.stopwatchSeconds * 1000L
             state.copy(
-                timer = state.timer.copy(isRunning = true, hasStarted = true)
+                timer = t.copy(
+                    isRunning = true,
+                    hasStarted = true,
+                    timerEndTimeEpochMillis = endTime,
+                    stopwatchStartTimeEpochMillis = swStart
+                )
             )
         }
+        saveCurrentTimerToStorage()
+        syncRunningTimerNotificationsAndAlarms()
         startTimerTicker()
     }
 
     fun pauseTimer() {
         if (_uiState.value.timer.strictMode && _uiState.value.timer.phase == TimerPhase.FOCUS) {
-            return // Disabled in strict mode
+            return
         }
+        reconcileRunningTimerWithTimestamp()
         timerJob?.cancel()
-        _uiState.update { it.copy(timer = it.timer.copy(isRunning = false)) }
+        _uiState.update {
+            it.copy(
+                timer = it.timer.copy(
+                    isRunning = false,
+                    timerEndTimeEpochMillis = null,
+                    stopwatchStartTimeEpochMillis = null
+                )
+            )
+        }
+        saveCurrentTimerToStorage()
+        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+        FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
         syncWhiteNoise()
     }
 
@@ -447,7 +641,9 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         val settings = _uiState.value.data.settings
         timerJob?.cancel()
 
-        // If Stopwatch mode was used in Focus phase and >= 60s elapsed, log it!
+        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+        FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+
         if (timer.countMode == TimerCountMode.STOPWATCH &&
             timer.phase == TimerPhase.FOCUS &&
             timer.stopwatchSeconds >= 60
@@ -471,10 +667,13 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     strictMode = false,
                     totalPhaseSeconds = focusSecs,
                     remainingSeconds = focusSecs,
-                    stopwatchSeconds = 0
+                    stopwatchSeconds = 0,
+                    timerEndTimeEpochMillis = null,
+                    stopwatchStartTimeEpochMillis = null
                 )
             )
         }
+        saveCurrentTimerToStorage()
         syncWhiteNoise()
     }
 
@@ -482,8 +681,12 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         val timer = _uiState.value.timer
         val settings = _uiState.value.data.settings
         timerJob?.cancel()
+        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+        FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+
         val focusSecs = getFocusDurationSeconds(timer.activeTaskId, settings)
         val autoStart = settings.autoStartNextPomodoro
+        val now = System.currentTimeMillis()
         _uiState.update {
             it.copy(
                 timer = it.timer.copy(
@@ -491,18 +694,29 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     totalPhaseSeconds = focusSecs,
                     remainingSeconds = focusSecs,
                     stopwatchSeconds = 0,
+                    timerEndTimeEpochMillis = if (autoStart) now + focusSecs * 1000L else null,
+                    stopwatchStartTimeEpochMillis = if (autoStart) now else null,
                     isRunning = autoStart,
                     hasStarted = autoStart
                 )
             )
         }
-        if (autoStart) startTimerTicker() else syncWhiteNoise()
+        saveCurrentTimerToStorage()
+        if (autoStart) {
+            syncRunningTimerNotificationsAndAlarms()
+            startTimerTicker()
+        } else {
+            syncWhiteNoise()
+        }
     }
 
     fun setTimerCountMode(mode: TimerCountMode) {
         val settings = _uiState.value.data.settings
         val timer = _uiState.value.timer
         timerJob?.cancel()
+        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+        FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+
         val focusSecs = getFocusDurationSeconds(timer.activeTaskId, settings)
         _uiState.update {
             it.copy(
@@ -513,16 +727,95 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     hasStarted = false,
                     totalPhaseSeconds = focusSecs,
                     remainingSeconds = focusSecs,
-                    stopwatchSeconds = 0
+                    stopwatchSeconds = 0,
+                    timerEndTimeEpochMillis = null,
+                    stopwatchStartTimeEpochMillis = null
                 )
             )
         }
+        saveCurrentTimerToStorage()
         syncWhiteNoise()
     }
 
     fun toggleStrictMode() {
         _uiState.update { state ->
             state.copy(timer = state.timer.copy(strictMode = !state.timer.strictMode))
+        }
+        saveCurrentTimerToStorage()
+        if (_uiState.value.timer.isRunning) {
+            updateOngoingNotificationTick()
+        }
+    }
+
+    private fun syncRunningTimerNotificationsAndAlarms() {
+        val state = _uiState.value
+        val t = state.timer
+        val settings = state.data.settings
+        if (!t.isRunning) {
+            FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+            FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+            return
+        }
+
+        updateOngoingNotificationTick()
+
+        if (t.countMode == TimerCountMode.COUNTDOWN && t.timerEndTimeEpochMillis != null) {
+            FocusNotificationManager.scheduleExactTimerCompletionAlarm(
+                context = appContext,
+                triggerAtMillis = t.timerEndTimeEpochMillis,
+                taskTitle = activeTaskOrDefaultTitle(),
+                phase = t.phase,
+                soundAndVibration = settings.alarmSoundAndVibration && settings.alarmEnabled,
+                isArabic = settings.language == AppLanguage.AR
+            )
+        } else {
+            FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+        }
+    }
+
+    private fun updateOngoingNotificationTick() {
+        val state = _uiState.value
+        val t = state.timer
+        if (!t.isRunning) return
+        val displaySecs = if (t.countMode == TimerCountMode.STOPWATCH && t.phase == TimerPhase.FOCUS) {
+            t.stopwatchSeconds
+        } else {
+            t.remainingSeconds
+        }
+        FocusNotificationManager.showOrUpdateOngoingTimerNotification(
+            context = appContext,
+            taskTitle = activeTaskOrDefaultTitle(),
+            phase = t.phase,
+            formattedTime = formatSecondsMmSs(displaySecs),
+            strictMode = t.strictMode,
+            settings = state.data.settings
+        )
+    }
+
+    private fun reconcileRunningTimerWithTimestamp() {
+        val state = _uiState.value
+        val t = state.timer
+        if (!t.isRunning) return
+
+        val now = System.currentTimeMillis()
+        if (t.countMode == TimerCountMode.STOPWATCH && t.phase == TimerPhase.FOCUS) {
+            val start = t.stopwatchStartTimeEpochMillis ?: now
+            val elapsed = max(0, ((now - start) / 1000L).toInt())
+            _uiState.update {
+                it.copy(timer = it.timer.copy(stopwatchSeconds = elapsed))
+            }
+            updateOngoingNotificationTick()
+        } else {
+            val end = t.timerEndTimeEpochMillis ?: (now + t.remainingSeconds * 1000L)
+            val rem = max(0, ceil((end - now) / 1000.0).toInt())
+            if (rem <= 0) {
+                onCountdownPhaseCompleted()
+            } else {
+                _uiState.update {
+                    it.copy(timer = it.timer.copy(remainingSeconds = rem))
+                }
+                updateOngoingNotificationTick()
+            }
         }
     }
 
@@ -532,24 +825,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         timerJob = viewModelScope.launch {
             while (isActive) {
                 delay(1000L)
-                val state = _uiState.value
-                val t = state.timer
-                if (!t.isRunning) break
-
-                if (t.countMode == TimerCountMode.STOPWATCH && t.phase == TimerPhase.FOCUS) {
-                    _uiState.update {
-                        it.copy(timer = it.timer.copy(stopwatchSeconds = it.timer.stopwatchSeconds + 1))
-                    }
-                } else {
-                    val nextRem = t.remainingSeconds - 1
-                    if (nextRem <= 0) {
-                        onCountdownPhaseCompleted()
-                    } else {
-                        _uiState.update {
-                            it.copy(timer = it.timer.copy(remainingSeconds = nextRem))
-                        }
-                    }
-                }
+                if (!_uiState.value.timer.isRunning) break
+                reconcileRunningTimerWithTimestamp()
             }
         }
     }
@@ -558,11 +835,25 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         val state = _uiState.value
         val settings = state.data.settings
         val t = state.timer
+        val taskTitle = activeTaskOrDefaultTitle()
 
-        if (settings.alarmEnabled) {
+        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+        FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+
+        val playSound = settings.alarmSoundAndVibration && settings.alarmEnabled
+        if (playSound) {
             soundSynthesizer.playCompletionChime()
         }
 
+        FocusNotificationManager.showTimerCompletionNotification(
+            context = appContext,
+            taskTitle = taskTitle,
+            phaseName = t.phase.name,
+            soundAndVibration = playSound,
+            isArabic = settings.language == AppLanguage.AR
+        )
+
+        val now = System.currentTimeMillis()
         if (t.phase == TimerPhase.FOCUS) {
             val mins = (t.totalPhaseSeconds / 60).coerceAtLeast(1)
             recordCompletedFocusSession(
@@ -583,13 +874,17 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                             cycleCount = newCycle,
                             totalPhaseSeconds = focusSecs,
                             remainingSeconds = focusSecs,
+                            timerEndTimeEpochMillis = if (autoNext) now + focusSecs * 1000L else null,
                             isRunning = autoNext,
                             hasStarted = autoNext,
                             strictMode = false
                         )
                     )
                 }
-                if (!autoNext) {
+                saveCurrentTimerToStorage()
+                if (autoNext) {
+                    syncRunningTimerNotificationsAndAlarms()
+                } else {
                     timerJob?.cancel()
                     syncWhiteNoise()
                 }
@@ -605,19 +900,22 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                             cycleCount = newCycle,
                             totalPhaseSeconds = breakSecs,
                             remainingSeconds = breakSecs,
+                            timerEndTimeEpochMillis = if (autoStartBreak) now + breakSecs * 1000L else null,
                             isRunning = autoStartBreak,
                             hasStarted = autoStartBreak,
                             strictMode = false
                         )
                     )
                 }
-                if (!autoStartBreak) {
+                saveCurrentTimerToStorage()
+                if (autoStartBreak) {
+                    syncRunningTimerNotificationsAndAlarms()
+                } else {
                     timerJob?.cancel()
                     syncWhiteNoise()
                 }
             }
         } else {
-            // Break finished -> back to Focus
             val focusSecs = getFocusDurationSeconds(t.activeTaskId, settings)
             val autoNext = settings.autoStartNextPomodoro
             _uiState.update {
@@ -626,12 +924,16 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                         phase = TimerPhase.FOCUS,
                         totalPhaseSeconds = focusSecs,
                         remainingSeconds = focusSecs,
+                        timerEndTimeEpochMillis = if (autoNext) now + focusSecs * 1000L else null,
                         isRunning = autoNext,
                         hasStarted = autoNext
                     )
                 )
             }
-            if (!autoNext) {
+            saveCurrentTimerToStorage()
+            if (autoNext) {
+                syncRunningTimerNotificationsAndAlarms()
+            } else {
                 timerJob?.cancel()
                 syncWhiteNoise()
             }
@@ -669,7 +971,6 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             } else data.tasks
 
-            // Forest Gamification: 10 Sunlight Points per minute + plant tree
             val earnedPoints = durationMinutes * 10
             val totalGrowth = data.forestState.currentGrowthMinutes + durationMinutes
             val newTrees = if (durationMinutes >= 5) {
@@ -787,7 +1088,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         }
         val newSettings = _uiState.value.data.settings
         val timer = _uiState.value.timer
-        // If timer hasn't started yet and Pomodoro length changed, update display immediately
+
         if (!timer.hasStarted && timer.phase == TimerPhase.FOCUS &&
             prevSettings.pomodoroMinutes != newSettings.pomodoroMinutes
         ) {
@@ -796,6 +1097,50 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 it.copy(timer = it.timer.copy(totalPhaseSeconds = secs, remainingSeconds = secs))
             }
         }
+
+        // Handle Task Reminders Toggle
+        if (prevSettings.enableTaskReminders != newSettings.enableTaskReminders) {
+            if (newSettings.enableTaskReminders) {
+                requestNativePermissionsIfMissing()
+                FocusNotificationManager.syncAllTaskReminders(
+                    context = appContext,
+                    tasks = _uiState.value.data.tasks,
+                    settings = newSettings
+                )
+            } else {
+                FocusNotificationManager.cancelAllTaskReminders(
+                    context = appContext,
+                    tasks = _uiState.value.data.tasks
+                )
+            }
+        }
+
+        // Handle Persistent Background Timer Notification Toggle
+        if (prevSettings.persistentTimerNotification != newSettings.persistentTimerNotification) {
+            if (newSettings.persistentTimerNotification) {
+                requestNativePermissionsIfMissing()
+                if (timer.isRunning) updateOngoingNotificationTick()
+            } else {
+                FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+            }
+        }
+
+        // Handle Alarm Sound & Vibration Toggle
+        if (prevSettings.alarmSoundAndVibration != newSettings.alarmSoundAndVibration ||
+            prevSettings.alarmEnabled != newSettings.alarmEnabled
+        ) {
+            if (timer.isRunning && timer.countMode == TimerCountMode.COUNTDOWN) {
+                syncRunningTimerNotificationsAndAlarms()
+            }
+            if (newSettings.enableTaskReminders) {
+                FocusNotificationManager.syncAllTaskReminders(
+                    context = appContext,
+                    tasks = _uiState.value.data.tasks,
+                    settings = newSettings
+                )
+            }
+        }
+
         syncWhiteNoise()
     }
 
@@ -816,6 +1161,9 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun importBackupJson(json: String): Boolean {
         val parsed = repository.parseBackupJson(json) ?: return false
         timerJob?.cancel()
+        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+        FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+
         val secs = parsed.settings.pomodoroMinutes * 60
         _uiState.update {
             it.copy(
@@ -828,12 +1176,16 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         viewModelScope.launch { repository.saveState(parsed) }
+        FocusNotificationManager.syncAllTaskReminders(appContext, parsed.tasks, parsed.settings)
         syncWhiteNoise()
         return true
     }
 
     fun resetDemoData() {
         timerJob?.cancel()
+        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+        FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+
         val demo = SeedData.createInitialState()
         val secs = demo.settings.pomodoroMinutes * 60
         _uiState.update {
@@ -848,6 +1200,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         viewModelScope.launch { repository.saveState(demo) }
+        FocusNotificationManager.syncAllTaskReminders(appContext, demo.tasks, demo.settings)
         syncWhiteNoise()
     }
 

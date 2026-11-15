@@ -1,10 +1,14 @@
 package com.example
 
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -29,6 +33,8 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -36,10 +42,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.i18n.AppStrings
 import com.example.model.AppLanguage
+import com.example.ui.components.BackgroundTimerPermissionsDialog
 import com.example.ui.components.FloatingMiniTimerBar
 import com.example.ui.components.ForestDialog
 import com.example.ui.components.FullScreenTimerOverlay
@@ -79,6 +89,33 @@ fun FocusTodoAppRoot(
     val isArabic = settings.language == AppLanguage.AR
     val s = AppStrings.get(settings.language)
     val layoutDir = if (isArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.onAppResumed()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        viewModel.refreshSystemPermissions()
+    }
+
+    LaunchedEffect(uiState.permissionRequestTrigger) {
+        if (uiState.permissionRequestTrigger > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (!uiState.systemPermissions.notificationsGranted) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
 
     CompositionLocalProvider(LocalLayoutDirection provides layoutDir) {
         FocusTodoTheme(darkTheme = settings.darkTheme) {
@@ -349,9 +386,27 @@ fun FocusTodoAppRoot(
                         s = s,
                         onDismiss = { viewModel.setShowSettings(false) },
                         onUpdateSettings = { viewModel.updateSettings(it) },
+                        onRequestPermissions = { viewModel.requestNativePermissionsIfMissing() },
+                        onOpenBackgroundPermissionsModal = { viewModel.setShowBackgroundPermissionsModal(true) },
                         onExportJson = { viewModel.exportBackupJson() },
                         onImportJson = { viewModel.importBackupJson(it) },
                         onResetDemoData = { viewModel.resetDemoData() }
+                    )
+                }
+
+                // Background Timer Permissions Modal (أذونات المؤقت في الخلفية)
+                AnimatedVisibility(
+                    visible = uiState.showBackgroundPermissionsModal,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it / 6 }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 6 })
+                ) {
+                    BackgroundTimerPermissionsDialog(
+                        uiState = uiState,
+                        s = s,
+                        onDismiss = { viewModel.setShowBackgroundPermissionsModal(false) },
+                        onToggleLockedInRecents = { confirmed ->
+                            viewModel.updateSettings { it.copy(lockedInRecentsConfirmed = confirmed) }
+                        }
                     )
                 }
             }

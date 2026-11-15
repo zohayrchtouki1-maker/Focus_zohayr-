@@ -154,6 +154,22 @@ data class ForestState(
 )
 
 @JsonClass(generateAdapter = true)
+data class PersistedTimerState(
+    val activeTaskId: String? = null,
+    val phase: TimerPhase = TimerPhase.FOCUS,
+    val countMode: TimerCountMode = TimerCountMode.COUNTDOWN,
+    val isRunning: Boolean = false,
+    val hasStarted: Boolean = false,
+    val strictMode: Boolean = false,
+    val totalPhaseSeconds: Int = 25 * 60,
+    val remainingSeconds: Int = 25 * 60,
+    val stopwatchSeconds: Int = 0,
+    val timerEndTimeEpochMillis: Long? = null,
+    val stopwatchStartTimeEpochMillis: Long? = null,
+    val cycleCount: Int = 0
+)
+
+@JsonClass(generateAdapter = true)
 data class AppSettings(
     val pomodoroMinutes: Int = 25,
     val shortBreakMinutes: Int = 5,
@@ -163,6 +179,11 @@ data class AppSettings(
     val autoStartNextPomodoro: Boolean = false,
     val disableBreaks: Boolean = false,
     val alarmEnabled: Boolean = true,
+    val enableTaskReminders: Boolean = true,
+    val persistentTimerNotification: Boolean = true,
+    val alarmSoundAndVibration: Boolean = true,
+    val lockedInRecentsConfirmed: Boolean = false,
+    val hasPromptedPermissionsOnLaunch: Boolean = false,
     val darkTheme: Boolean = false,
     val language: AppLanguage = AppLanguage.AR,
     val whiteNoise: WhiteNoiseType = WhiteNoiseType.NONE,
@@ -177,5 +198,6 @@ data class AppBackupState(
     val tags: List<TagItem> = emptyList(),
     val focusRecords: List<FocusRecord> = emptyList(),
     val settings: AppSettings = AppSettings(),
-    val forestState: ForestState = ForestState()
+    val forestState: ForestState = ForestState(),
+    val persistedTimer: PersistedTimerState? = null
 )
