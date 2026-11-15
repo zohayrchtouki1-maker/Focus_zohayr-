@@ -185,8 +185,11 @@ fun ReportsDialog(
                 )
                 Button(
                     onClick = { showManualDialog = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = CoralPrimary),
-                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White
+                    ),
+                    shape = CircleShape,
                     modifier = Modifier.testTag("add_manual_record_button")
                 ) {
                     Text(s.addFocusRecord, style = MaterialTheme.typography.labelLarge)
@@ -221,9 +224,9 @@ fun ReportsDialog(
                 // Project Time Distribution (Donut Chart + Legend)
                 item {
                     Surface(
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -389,9 +392,9 @@ fun ReportsDialog(
                         val proj = data.projects.find { it.id == rec.projectId }
                         val pColor = proj?.let { parseHexColor(it.colorHex) } ?: CoralPrimary
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(20.dp),
                             color = MaterialTheme.colorScheme.surface,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -462,9 +465,9 @@ private fun ReportStatCard(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         modifier = modifier
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -498,9 +501,9 @@ private fun BarChartCard(
 ) {
     val maxVal = (bars.maxOfOrNull { it.second } ?: 1).coerceAtLeast(1)
     Surface(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         modifier = modifier
     ) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -641,15 +644,27 @@ private fun ManualFocusRecordDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            Button(
                 onClick = {
                     val mins = (durationText.toIntOrNull() ?: 25).coerceIn(1, 300)
                     onSave(selectedTaskId, selectedProjectId, selectedDay, startHour, 0, mins)
-                }
+                },
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = Color.White
+                )
             ) { Text(s.saveRecord) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(s.cancel) }
+            Button(
+                onClick = onDismiss,
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            ) { Text(s.cancel) }
         }
     )
 }

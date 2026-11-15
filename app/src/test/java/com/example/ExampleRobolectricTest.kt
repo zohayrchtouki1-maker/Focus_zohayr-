@@ -9,6 +9,7 @@ import com.example.data.SeedData
 import com.example.model.PersistedTimerState
 import com.example.model.SmartListType
 import com.example.model.TaskItem
+import com.example.model.TaskPriority
 import com.example.model.TaskSortOption
 import com.example.model.TimerPhase
 import com.example.notifications.FocusNotificationManager
@@ -34,18 +35,28 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `seed data and JSON export import roundtrip with notification settings and persisted timer`() {
+    fun `seed data starts with empty task list and JSON export import roundtrip works`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repo = FocusRepository(context)
-        val initial = SeedData.createInitialState().copy(
-            settings = SeedData.createInitialState().settings.copy(
+        val seed = SeedData.createInitialState()
+        assertTrue(seed.tasks.isEmpty())
+        assertTrue(seed.projects.isNotEmpty())
+
+        val userTask = TaskItem(
+            id = "user_task_1",
+            title = "مهمة المستخدم الأولى",
+            dueDateEpochDay = DateUtils.todayEpochDay()
+        )
+        val stateWithUserTask = seed.copy(
+            tasks = listOf(userTask),
+            settings = seed.settings.copy(
                 enableTaskReminders = true,
                 persistentTimerNotification = true,
                 alarmSoundAndVibration = true,
                 lockedInRecentsConfirmed = true
             ),
             persistedTimer = PersistedTimerState(
-                activeTaskId = "task_1",
+                activeTaskId = userTask.id,
                 phase = TimerPhase.FOCUS,
                 isRunning = true,
                 hasStarted = true,
@@ -54,14 +65,10 @@ class ExampleRobolectricTest {
             )
         )
 
-        assertTrue(initial.tasks.isNotEmpty())
-        assertTrue(initial.projects.isNotEmpty())
-        assertTrue(initial.focusRecords.isNotEmpty())
-
-        val json = repo.exportJson(initial)
+        val json = repo.exportJson(stateWithUserTask)
         val parsed = repo.parseBackupJson(json)
         assertNotNull(parsed)
-        assertEquals(initial.tasks.size, parsed?.tasks?.size)
+        assertEquals(1, parsed?.tasks?.size)
         assertEquals(true, parsed?.settings?.enableTaskReminders)
         assertEquals(true, parsed?.settings?.persistentTimerNotification)
         assertEquals(true, parsed?.settings?.lockedInRecentsConfirmed)
@@ -91,9 +98,26 @@ class ExampleRobolectricTest {
 
     @Test
     fun `smart list filtering returns today active and completed tasks`() {
-        val initial = SeedData.createInitialState()
+        val today = DateUtils.todayEpochDay()
+        val tasks = listOf(
+            TaskItem(
+                id = "u_active",
+                title = "مهمة نشطة اليوم",
+                priority = TaskPriority.HIGH,
+                dueDateEpochDay = today,
+                isCompleted = false
+            ),
+            TaskItem(
+                id = "u_done",
+                title = "مهمة مكتملة اليوم",
+                priority = TaskPriority.MEDIUM,
+                dueDateEpochDay = today,
+                isCompleted = true,
+                completedAtEpochMillis = System.currentTimeMillis()
+            )
+        )
         val (activeToday, completedToday) = TaskFilterUtils.filterTasks(
-            initial.tasks,
+            tasks,
             NavDestination.SmartList(SmartListType.TODAY),
             TaskSortOption.PRIORITY
         )

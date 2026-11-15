@@ -375,47 +375,79 @@ fun TaskInspectorPanel(
                     ScheduleChip(
                         label = s.someday,
                         selected = task.isSomeday,
-                        onClick = { onUpdateTask { it.copy(dueDateEpochDay = null, isSomeday = true) } }
+                        onClick = { onUpdateTask { it.copy(dueDateEpochDay = null, reminderTime = null, isSomeday = true) } }
                     )
+                    val customDateTimeLabel = if (task.dueDateEpochDay != null) {
+                        val d = DateUtils.formatEpochDay(task.dueDateEpochDay, isArabic)
+                        if (!task.reminderTime.isNullOrBlank()) "$d • ${task.reminderTime}" else d
+                    } else {
+                        s.customDate
+                    }
                     ScheduleChip(
-                        label = task.dueDateEpochDay?.let { DateUtils.formatEpochDay(it, isArabic) } ?: s.customDate,
-                        selected = false,
+                        label = customDateTimeLabel,
+                        selected = task.dueDateEpochDay != null && !task.reminderTime.isNullOrBlank(),
                         icon = Icons.Default.CalendarToday,
                         onClick = { showDatePicker = true }
                     )
-                    if (task.dueDateEpochDay != null || task.isSomeday) {
+                    if (task.dueDateEpochDay != null || task.isSomeday || task.reminderTime != null) {
                         ScheduleChip(
                             label = s.clearDate,
                             selected = false,
-                            onClick = { onUpdateTask { it.copy(dueDateEpochDay = null, isSomeday = false) } }
+                            onClick = { onUpdateTask { it.copy(dueDateEpochDay = null, reminderTime = null, isSomeday = false) } }
                         )
                     }
                 }
 
-                // Reminder Time quick chips
+                // Reminder Time quick chips + Unified Date/Time Picker trigger
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(Icons.Default.Alarm, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(Icons.Default.Alarm, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                     Text(s.reminder, style = MaterialTheme.typography.labelMedium)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    listOf("09:00", "14:00", "19:00", null).forEach { time ->
-                        val active = task.reminderTime == time
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (active) CoralPrimary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onUpdateTask { it.copy(reminderTime = time) } }
-                        ) {
-                            Text(
-                                text = time ?: s.priorityNone,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (active) CoralPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                            )
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    ScheduleChip(
+                        label = if (isArabic) "بعد 15 د" else "In 15m",
+                        selected = false,
+                        onClick = {
+                            val cal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.MINUTE, 15) }
+                            val d = DateUtils.epochDayFromMillis(cal.timeInMillis)
+                            val t = "%02d:%02d".format(cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE))
+                            onUpdateTask { it.copy(dueDateEpochDay = d, reminderTime = t, isSomeday = false) }
                         }
+                    )
+                    ScheduleChip(
+                        label = if (isArabic) "بعد ساعة" else "In 1h",
+                        selected = false,
+                        onClick = {
+                            val cal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.HOUR_OF_DAY, 1) }
+                            val d = DateUtils.epochDayFromMillis(cal.timeInMillis)
+                            val t = "%02d:%02d".format(cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE))
+                            onUpdateTask { it.copy(dueDateEpochDay = d, reminderTime = t, isSomeday = false) }
+                        }
+                    )
+                    ScheduleChip(
+                        label = if (isArabic) "غداً 9:00" else "Tomorrow 9:00",
+                        selected = task.dueDateEpochDay == today + 1 && task.reminderTime == "09:00",
+                        onClick = {
+                            onUpdateTask { it.copy(dueDateEpochDay = today + 1, reminderTime = "09:00", isSomeday = false) }
+                        }
+                    )
+                    ScheduleChip(
+                        label = task.reminderTime ?: (if (isArabic) "تحديد وقت ⏰" else "Pick Time ⏰"),
+                        selected = task.reminderTime != null,
+                        onClick = { showDatePicker = true }
+                    )
+                    if (task.reminderTime != null) {
+                        ScheduleChip(
+                            label = s.priorityNone,
+                            selected = false,
+                            onClick = { onUpdateTask { it.copy(reminderTime = null) } }
+                        )
                     }
                 }
 
@@ -513,8 +545,9 @@ fun TaskInspectorPanel(
             )
             OutlinedButton(
                 onClick = onDeleteTask,
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = CoralPrimary),
-                border = BorderStroke(1.dp, CoralPrimary.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(percent = 50),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
                 modifier = Modifier.testTag("inspector_delete_button")
             ) {
                 Icon(Icons.Default.Delete, null, modifier = Modifier.size(16.dp))
@@ -525,25 +558,22 @@ fun TaskInspectorPanel(
     }
 
     if (showDatePicker) {
-        val datePickerState = rememberDatePickerState()
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        datePickerState.selectedDateMillis?.let { millis ->
-                            onUpdateTask { it.copy(dueDateEpochDay = millis / 86_400_000L, isSomeday = false) }
-                        }
-                        showDatePicker = false
-                    }
-                ) { Text(s.save) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDatePicker = false }) { Text(s.cancel) }
+        UnifiedDateTimePickerDialog(
+            initialEpochDay = task.dueDateEpochDay ?: DateUtils.todayEpochDay(),
+            initialReminderTime = task.reminderTime,
+            isArabic = isArabic,
+            onDismiss = { showDatePicker = false },
+            onConfirm = { pickedDay, pickedTime ->
+                onUpdateTask {
+                    it.copy(
+                        dueDateEpochDay = pickedDay,
+                        reminderTime = pickedTime,
+                        isSomeday = false
+                    )
+                }
+                showDatePicker = false
             }
-        ) {
-            DatePicker(state = datePickerState)
-        }
+        )
     }
 }
 

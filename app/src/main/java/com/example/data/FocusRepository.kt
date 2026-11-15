@@ -20,7 +20,16 @@ class FocusRepository(private val context: Context) {
         try {
             if (stateFile.exists()) {
                 val raw = stateFile.readText(Charsets.UTF_8)
-                adapter.fromJson(raw)?.let { return@withContext it }
+                adapter.fromJson(raw)?.let { loaded ->
+                    val cleanedTasks = loaded.tasks.filterNot { it.id in SeedData.legacySampleTaskIds }
+                    val cleanedRecords = loaded.focusRecords.filterNot { it.id in SeedData.legacySampleRecordIds }
+                    val cleaned = if (cleanedTasks.size != loaded.tasks.size || cleanedRecords.size != loaded.focusRecords.size) {
+                        loaded.copy(tasks = cleanedTasks, focusRecords = cleanedRecords).also { saveStateInternal(it) }
+                    } else {
+                        loaded
+                    }
+                    return@withContext cleaned
+                }
             }
         } catch (_: Exception) {
             // Fallback to fresh seed data if file is corrupted

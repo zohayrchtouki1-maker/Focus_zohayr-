@@ -134,22 +134,12 @@ class FocusTimerReceiver : BroadcastReceiver() {
                     alarmIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
-                try {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        triggerAt,
-                        pendingIntent
-                    )
-                } catch (_: SecurityException) {
-                    try {
-                        alarmManager.setAndAllowWhileIdle(
-                            AlarmManager.RTC_WAKEUP,
-                            triggerAt,
-                            pendingIntent
-                        )
-                    } catch (_: Exception) {
-                    }
-                }
+                FocusNotificationManager.scheduleExactSafe(
+                    context = appContext,
+                    alarmManager = alarmManager,
+                    triggerAtMillis = triggerAt,
+                    pendingIntent = pendingIntent
+                )
             }
 
             Intent.ACTION_BOOT_COMPLETED -> {

@@ -256,11 +256,11 @@ fun ForestDialog(
                                     val speciesColor = Color(species.colorHex)
 
                                     Surface(
-                                        shape = RoundedCornerShape(16.dp),
+                                        shape = RoundedCornerShape(20.dp),
                                         color = MaterialTheme.colorScheme.surface,
                                         border = BorderStroke(
                                             if (isActive) 2.dp else 1.dp,
-                                            if (isActive) ForestEmerald else MaterialTheme.colorScheme.outlineVariant
+                                            if (isActive) ForestEmerald else MaterialTheme.colorScheme.outline
                                         ),
                                         modifier = Modifier.weight(1f)
                                     ) {
@@ -294,17 +294,17 @@ fun ForestDialog(
                                                 enabled = isUnlocked || canAfford,
                                                 colors = ButtonDefaults.buttonColors(
                                                     containerColor = when {
-                                                        isActive -> ForestEmerald
-                                                        isUnlocked -> MaterialTheme.colorScheme.primaryContainer
+                                                        isActive -> MaterialTheme.colorScheme.primary
+                                                        isUnlocked -> MaterialTheme.colorScheme.secondaryContainer
                                                         else -> SunlightGold
                                                     },
                                                     contentColor = when {
                                                         isActive -> Color.White
-                                                        isUnlocked -> MaterialTheme.colorScheme.onPrimaryContainer
+                                                        isUnlocked -> MaterialTheme.colorScheme.onSecondaryContainer
                                                         else -> Color.White
                                                     }
                                                 ),
-                                                shape = RoundedCornerShape(10.dp),
+                                                shape = CircleShape,
                                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                                                 modifier = Modifier.fillMaxWidth()
                                             ) {

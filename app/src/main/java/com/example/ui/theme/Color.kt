@@ -2,58 +2,65 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Primary Brand & Focus Colors
-val CoralPrimary = Color(0xFFE74F44)
-val CoralLight = Color(0xFFFF7A70)
-val CoralDark = Color(0xFFC5372D)
-val CoralContainerLight = Color(0xFFFFECEA)
-val CoralContainerDark = Color(0xFF471B18)
+// Unified Royal Blue Brand & Accent Palette (Inspired by Google Gemini)
+val RoyalBlueDarkTheme = Color(0xFF4A6EE0)
+val RoyalBlueAccentDark = Color(0xFF3B5998)
+val RoyalBlueLightTheme = Color(0xFF1A73E8)
 
-// Timer Mode Colors
-val FocusGradientStart = Color(0xFF2B1214)
-val FocusGradientEnd = Color(0xFF6B1E1A)
-val ShortBreakColor = Color(0xFF0D9488)
-val ShortBreakGradientStart = Color(0xFF0A2220)
-val ShortBreakGradientEnd = Color(0xFF115E59)
-val LongBreakColor = Color(0xFF4F46E5)
-val LongBreakGradientStart = Color(0xFF131433)
-val LongBreakGradientEnd = Color(0xFF312E81)
+// Keep CoralPrimary alias mapped to Royal Blue so existing accent references stay unified
+val CoralPrimary = Color(0xFF4A6EE0)
+val CoralLight = Color(0xFF7B9AFF)
+val CoralDark = Color(0xFF1A73E8)
+val CoralContainerLight = Color(0xFFD2E3FC)
+val CoralContainerDark = Color(0xFF223056)
+
+// Timer Mode Colors (Black / Charcoal / Royal Blue)
+val FocusGradientStart = Color(0xFF0E0E10)
+val FocusGradientEnd = Color(0xFF1B2642)
+val ShortBreakColor = Color(0xFF3B5998)
+val ShortBreakGradientStart = Color(0xFF0E0E10)
+val ShortBreakGradientEnd = Color(0xFF1A2E3B)
+val LongBreakColor = Color(0xFF4A6EE0)
+val LongBreakGradientStart = Color(0xFF0E0E10)
+val LongBreakGradientEnd = Color(0xFF1E2238)
 
 // Priority & Semantic Colors
 val PriorityHighColor = Color(0xFFEF4444)
 val PriorityMediumColor = Color(0xFFF59E0B)
-val PriorityLowColor = Color(0xFF3B82F6)
-val PriorityNoneColor = Color(0xFF94A3B8)
+val PriorityLowColor = Color(0xFF4A6EE0)
+val PriorityNoneColor = Color(0xFF9AA0A6)
 
-val ForestEmerald = Color(0xFF10B981)
-val SunlightGold = Color(0xFFF59E0B)
+val ForestEmerald = Color(0xFF34A853)
+val SunlightGold = Color(0xFFFABB05)
 
-// Light Surfaces
-val LightBackground = Color(0xFFF5F6FA)
-val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceVariant = Color(0xFFEDF0F5)
-val LightSidebarBg = Color(0xFFF9FAFC)
-val LightOutline = Color(0xFFE2E8F0)
-val LightTextPrimary = Color(0xFF1E293B)
-val LightTextSecondary = Color(0xFF64748B)
+// Light Mode Surfaces (Clean Pure White & Soft Cool Gray-Blue)
+val LightBackground = Color(0xFFFFFFFF)
+val LightSurface = Color(0xFFF0F4F9)
+val LightSurfaceVariant = Color(0xFFE1E5EA)
+val LightSidebarBg = Color(0xFFF0F4F9)
+val LightOutline = Color(0xFFDCE1E8)
+val LightTextPrimary = Color(0xFF1F1F1F)
+val LightTextSecondary = Color(0xFF5F6368)
 
-// Dark Surfaces
-val DarkBackground = Color(0xFF0F141A)
-val DarkSurface = Color(0xFF182028)
-val DarkSurfaceVariant = Color(0xFF232D38)
-val DarkSidebarBg = Color(0xFF131920)
-val DarkOutline = Color(0xFF2D3846)
-val DarkTextPrimary = Color(0xFFF1F5F9)
-val DarkTextSecondary = Color(0xFF94A3B8)
+// Dark Mode Surfaces (Pure Deep OLED Black & Soft Charcoal Gray)
+val DarkBackground = Color(0xFF0E0E10)
+val DarkSurface = Color(0xFF1E1F22)
+val DarkSurfaceVariant = Color(0xFF2A2B2F)
+val DarkSidebarBg = Color(0xFF16171A)
+val DarkOutline = Color(0xFF2C2D30)
+val DarkTextPrimary = Color(0xFFE3E3E3)
+val DarkTextSecondary = Color(0xFF9AA0A6)
+val DarkCancelButtonBg = Color(0xFF2A2B2F)
+val DarkCancelButtonText = Color(0xFFE2E2E6)
 
 val ProjectColorPalette = listOf(
-    "#E74F44",
-    "#F59E0B",
-    "#10B981",
-    "#0EA5E9",
-    "#4F46E5",
+    "#4A6EE0",
+    "#1A73E8",
+    "#3B5998",
+    "#34A853",
+    "#FABB05",
     "#8B5CF6",
     "#EC4899",
     "#14B8A6",
-    "#64748B"
+    "#9AA0A6"
 )

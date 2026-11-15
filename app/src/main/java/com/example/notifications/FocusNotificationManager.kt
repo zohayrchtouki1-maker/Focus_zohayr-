@@ -241,7 +241,7 @@ object FocusNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        scheduleExactSafe(alarmManager, triggerAtMillis, pendingIntent)
+        scheduleExactSafe(context, alarmManager, triggerAtMillis, pendingIntent)
     }
 
     fun cancelExactTimerCompletionAlarm(context: Context) {
@@ -308,6 +308,7 @@ object FocusNotificationManager {
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                 ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             builder.setSound(uri)
+            builder.setFullScreenIntent(contentPending, true)
             triggerDeviceVibration(context)
         } else {
             builder.setSilent(true)
@@ -371,7 +372,7 @@ object FocusNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        scheduleExactSafe(alarmManager, triggerAt, pendingIntent)
+        scheduleExactSafe(context, alarmManager, triggerAt, pendingIntent)
     }
 
     fun cancelTaskReminder(context: Context, taskId: String) {
@@ -481,6 +482,8 @@ object FocusNotificationManager {
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                 ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             builder.setSound(uri)
+            builder.setFullScreenIntent(contentPending, true)
+            playSystemAlarmBurst(context)
             triggerDeviceVibration(context)
         } else {
             builder.setSilent(true)
@@ -492,42 +495,56 @@ object FocusNotificationManager {
         }
     }
 
-    private fun scheduleExactSafe(
+    fun scheduleExactSafe(
+        context: Context,
         alarmManager: AlarmManager,
         triggerAtMillis: Long,
         pendingIntent: PendingIntent
     ) {
+        val showAppIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val showPendingIntent = PendingIntent.getActivity(
+            context,
+            9099,
+            showAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (alarmManager.canScheduleExactAlarms()) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        triggerAtMillis,
-                        pendingIntent
-                    )
-                } else {
-                    alarmManager.setAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        triggerAtMillis,
-                        pendingIntent
-                    )
-                }
-            } else {
+            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerAtMillis, showPendingIntent)
+            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
+        } catch (_: SecurityException) {
+            try {
                 alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
                     triggerAtMillis,
                     pendingIntent
                 )
-            }
-        } catch (_: SecurityException) {
-            try {
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
-                    pendingIntent
-                )
             } catch (_: Exception) {
+                try {
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                } catch (_: Exception) {
+                }
             }
+        }
+    }
+
+    private fun playSystemAlarmBurst(context: Context) {
+        try {
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                ?: return
+            val ringtone = RingtoneManager.getRingtone(context, uri) ?: return
+            ringtone.audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            ringtone.play()
+        } catch (_: Exception) {
         }
     }
 

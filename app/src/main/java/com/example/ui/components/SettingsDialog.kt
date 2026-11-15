@@ -248,8 +248,8 @@ fun SettingsDialog(
 
                         Button(
                             onClick = onOpenBackgroundPermissionsModal,
-                            colors = ButtonDefaults.buttonColors(containerColor = CoralPrimary),
-                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = CoralPrimary, contentColor = Color.White),
+                            shape = RoundedCornerShape(percent = 50),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("open_background_permissions_button")
@@ -378,8 +378,8 @@ fun SettingsDialog(
                         ) {
                             Button(
                                 onClick = { exportLauncher.launch("focus_todo_backup.json") },
-                                colors = ButtonDefaults.buttonColors(containerColor = ForestEmerald),
-                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = CoralPrimary, contentColor = Color.White),
+                                shape = RoundedCornerShape(percent = 50),
                                 modifier = Modifier.weight(1f).testTag("export_json_button")
                             ) {
                                 Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
@@ -388,7 +388,12 @@ fun SettingsDialog(
                             }
                             OutlinedButton(
                                 onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(percent = 50),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.secondary,
+                                    contentColor = MaterialTheme.colorScheme.onSecondary
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                                 modifier = Modifier.weight(1f).testTag("import_json_button")
                             ) {
                                 Icon(Icons.Default.Upload, null, modifier = Modifier.size(18.dp))
@@ -402,9 +407,12 @@ fun SettingsDialog(
                                 onResetDemoData()
                                 backupFeedback = s.backupSuccessImport
                             },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = CoralPrimary),
-                            border = BorderStroke(1.dp, CoralPrimary.copy(alpha = 0.5f)),
-                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary,
+                                contentColor = MaterialTheme.colorScheme.onSecondary
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            shape = RoundedCornerShape(percent = 50),
                             modifier = Modifier.fillMaxWidth().testTag("reset_demo_button")
                         ) {
                             Icon(Icons.Default.RestartAlt, null, modifier = Modifier.size(18.dp))
@@ -548,7 +556,7 @@ fun BackgroundTimerPermissionsDialog(
                 // Card 5: Lock in recent apps (Interactive Confirmed / تم التثبيت toggle)
                 item {
                     Surface(
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colorScheme.surface,
                         border = BorderStroke(
                             1.dp,
@@ -556,7 +564,7 @@ fun BackgroundTimerPermissionsDialog(
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(20.dp))
                             .clickable { onToggleLockedInRecents(!settings.lockedInRecentsConfirmed) }
                             .testTag("card_lock_in_recent_apps")
                     ) {
@@ -633,12 +641,12 @@ private fun BackgroundPermissionActionCard(
     testTag: String
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
             .testTag(testTag)
     ) {
@@ -756,7 +764,7 @@ private fun SettingsSectionCard(
     content: @Composable () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth()

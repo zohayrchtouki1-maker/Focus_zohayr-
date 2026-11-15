@@ -242,7 +242,7 @@ object AppStrings {
         sortAlphabetical = "أبجدياً",
         showCompleted = "إظهار المكتملة",
         hideCompleted = "إخفاء المكتملة",
-        emptyTasksTitle = "لا توجد مهام هنا حالياً",
+        emptyTasksTitle = "لا توجد مهام حالياً",
         emptyTasksSubtitle = "أضف مهمة جديدة بالأعلى وحدد عدد الطماطم للبدء!",
         freeFocus = "تركيز حر",
         focusSession = "جلسة تركيز",

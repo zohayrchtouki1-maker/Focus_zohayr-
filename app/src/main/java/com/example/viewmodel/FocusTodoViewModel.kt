@@ -281,10 +281,15 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         isEvent: Boolean,
         priority: TaskPriority,
         projectId: String?,
-        tagIds: List<String>
+        tagIds: List<String>,
+        reminderTime: String? = null
     ) {
         val cleanTitle = title.trim()
         if (cleanTitle.isEmpty()) return
+
+        if (reminderTime != null) {
+            requestNativePermissionsIfMissing()
+        }
 
         val task = TaskItem(
             title = cleanTitle,
@@ -294,7 +299,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             estimatedPomodoros = estimatedPomodoros.coerceIn(1, 20),
             dueDateEpochDay = dueDateEpochDay,
             isSomeday = isSomeday,
-            isEvent = isEvent
+            isEvent = isEvent,
+            reminderTime = reminderTime
         )
         commitData { data ->
             data.copy(tasks = listOf(task) + data.tasks)

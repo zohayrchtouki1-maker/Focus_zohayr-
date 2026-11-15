@@ -177,8 +177,8 @@ fun FocusTodoAppRoot(
                                     onToggleTheme = { viewModel.toggleDarkTheme() },
                                     onSortChange = { viewModel.setSortOption(it) },
                                     onToggleShowCompleted = { viewModel.toggleShowCompletedAccordion() },
-                                    onAddTask = { title, poms, due, someday, event, prio, projId, tags ->
-                                        viewModel.addTask(title, poms, due, someday, event, prio, projId, tags)
+                                    onAddTask = { title, poms, due, someday, event, prio, projId, tags, reminderTime ->
+                                        viewModel.addTask(title, poms, due, someday, event, prio, projId, tags, reminderTime)
                                     },
                                     onToggleTaskCompleted = { viewModel.toggleTaskCompleted(it) },
                                     onInspectTask = { viewModel.openTaskInspector(it) },
@@ -257,34 +257,40 @@ fun FocusTodoAppRoot(
                             }
                         }
                     ) {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            MainTaskWorkspace(
-                                uiState = uiState,
-                                s = s,
-                                isCompact = true,
-                                onOpenDrawer = { scope.launch { drawerState.open() } },
-                                onOpenReports = { viewModel.setShowReports(true) },
-                                onOpenForest = { viewModel.setShowForest(true) },
-                                onToggleLanguage = { viewModel.toggleLanguage() },
-                                onToggleTheme = { viewModel.toggleDarkTheme() },
-                                onSortChange = { viewModel.setSortOption(it) },
-                                onToggleShowCompleted = { viewModel.toggleShowCompletedAccordion() },
-                                onAddTask = { title, poms, due, someday, event, prio, projId, tags ->
-                                    viewModel.addTask(title, poms, due, someday, event, prio, projId, tags)
-                                },
-                                onToggleTaskCompleted = { viewModel.toggleTaskCompleted(it) },
-                                onInspectTask = { viewModel.openTaskInspector(it) },
-                                onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) }
-                            )
+                        Surface(
+                            modifier = Modifier.fillMaxSize(),
+                            color = MaterialTheme.colorScheme.background,
+                            contentColor = MaterialTheme.colorScheme.onBackground
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                MainTaskWorkspace(
+                                    uiState = uiState,
+                                    s = s,
+                                    isCompact = true,
+                                    onOpenDrawer = { scope.launch { drawerState.open() } },
+                                    onOpenReports = { viewModel.setShowReports(true) },
+                                    onOpenForest = { viewModel.setShowForest(true) },
+                                    onToggleLanguage = { viewModel.toggleLanguage() },
+                                    onToggleTheme = { viewModel.toggleDarkTheme() },
+                                    onSortChange = { viewModel.setSortOption(it) },
+                                    onToggleShowCompleted = { viewModel.toggleShowCompletedAccordion() },
+                                    onAddTask = { title, poms, due, someday, event, prio, projId, tags, reminderTime ->
+                                        viewModel.addTask(title, poms, due, someday, event, prio, projId, tags, reminderTime)
+                                    },
+                                    onToggleTaskCompleted = { viewModel.toggleTaskCompleted(it) },
+                                    onInspectTask = { viewModel.openTaskInspector(it) },
+                                    onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) }
+                                )
 
-                            FloatingMiniTimerBar(
-                                uiState = uiState,
-                                s = s,
-                                onExpand = { viewModel.setShowFullScreenTimer(true) },
-                                onStartOrResume = { viewModel.startOrResumeTimer() },
-                                onPause = { viewModel.pauseTimer() },
-                                modifier = Modifier.align(Alignment.BottomCenter)
-                            )
+                                FloatingMiniTimerBar(
+                                    uiState = uiState,
+                                    s = s,
+                                    onExpand = { viewModel.setShowFullScreenTimer(true) },
+                                    onStartOrResume = { viewModel.startOrResumeTimer() },
+                                    onPause = { viewModel.pauseTimer() },
+                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                )
+                            }
                         }
                     }
 

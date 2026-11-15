@@ -121,7 +121,8 @@ fun MainTaskWorkspace(
         isEvent: Boolean,
         priority: TaskPriority,
         projectId: String?,
-        tagIds: List<String>
+        tagIds: List<String>,
+        reminderTime: String?
     ) -> Unit,
     onToggleTaskCompleted: (String) -> Unit,
     onInspectTask: (String) -> Unit,
@@ -181,6 +182,7 @@ fun MainTaskWorkspace(
             (uiState.destination as? NavDestination.Tag)?.let { listOf(it.tagId) } ?: emptyList()
         )
     }
+    var quickReminderTime by remember { mutableStateOf<String?>(null) }
 
     var sortMenuOpen by remember { mutableStateOf(false) }
     var dateMenuOpen by remember { mutableStateOf(false) }
@@ -199,12 +201,16 @@ fun MainTaskWorkspace(
             uiState.destination == NavDestination.SmartList(SmartListType.EVENTS),
             quickPriority,
             quickProjectId,
-            quickTagIds
+            quickTagIds,
+            if (quickIsSomeday) null else quickReminderTime
         )
         quickTitle = ""
         quickPomodoros = 1
         quickPriority = TaskPriority.NONE
+        quickReminderTime = null
     }
+
+    val topBarContrastColor = if (uiState.data.settings.darkTheme) Color(0xFFFFFFFF) else Color(0xFF1F1F1F)
 
     Column(
         modifier = modifier
@@ -212,7 +218,7 @@ fun MainTaskWorkspace(
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
     ) {
-        // Header Row
+        // Header Row (TopAppBar)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -224,13 +230,18 @@ fun MainTaskWorkspace(
                     onClick = onOpenDrawer,
                     modifier = Modifier.testTag("open_drawer_button")
                 ) {
-                    Icon(Icons.Default.Menu, contentDescription = "Menu")
+                    Icon(
+                        imageVector = Icons.Default.Menu,
+                        contentDescription = "Menu",
+                        tint = topBarContrastColor
+                    )
                 }
             }
             Text(
                 text = destinationTitle,
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
+                color = topBarContrastColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
@@ -238,17 +249,26 @@ fun MainTaskWorkspace(
 
             if (isCompact) {
                 IconButton(onClick = onOpenReports) {
-                    Icon(Icons.Default.BarChart, contentDescription = s.reports, tint = PriorityLowColor)
+                    Icon(
+                        imageVector = Icons.Default.BarChart,
+                        contentDescription = s.reports,
+                        tint = topBarContrastColor
+                    )
                 }
                 IconButton(onClick = onOpenForest) {
-                    Icon(Icons.Default.Park, contentDescription = s.forest, tint = ForestEmerald)
+                    Icon(
+                        imageVector = Icons.Default.Park,
+                        contentDescription = s.forest,
+                        tint = topBarContrastColor
+                    )
                 }
             }
 
-            // Language Toggle Chip
+            // Language Toggle Chip ("EN" / "AR")
             Surface(
                 shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(1.dp, topBarContrastColor.copy(alpha = 0.65f)),
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(onClick = onToggleLanguage)
@@ -258,6 +278,7 @@ fun MainTaskWorkspace(
                     text = if (isArabic) "EN" else "AR",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
+                    color = topBarContrastColor,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
                 )
             }
@@ -265,20 +286,26 @@ fun MainTaskWorkspace(
             IconButton(onClick = onToggleTheme, modifier = Modifier.testTag("theme_toggle_button")) {
                 Icon(
                     imageVector = if (uiState.data.settings.darkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
-                    contentDescription = s.darkMode
+                    contentDescription = s.darkMode,
+                    tint = topBarContrastColor
                 )
             }
 
             IconButton(onClick = onToggleShowCompleted, modifier = Modifier.testTag("toggle_completed_button")) {
                 Icon(
                     imageVector = if (uiState.showCompletedAccordion) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                    contentDescription = if (uiState.showCompletedAccordion) s.hideCompleted else s.showCompleted
+                    contentDescription = if (uiState.showCompletedAccordion) s.hideCompleted else s.showCompleted,
+                    tint = topBarContrastColor
                 )
             }
 
             Box {
                 IconButton(onClick = { sortMenuOpen = true }, modifier = Modifier.testTag("sort_menu_button")) {
-                    Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = s.sortBy)
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Sort,
+                        contentDescription = s.sortBy,
+                        tint = topBarContrastColor
+                    )
                 }
                 DropdownMenu(expanded = sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {
                     TaskSortOption.entries.forEach { option ->
@@ -305,36 +332,78 @@ fun MainTaskWorkspace(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 110.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 4-Metric Summary Dashboard Bar
+            // 4-Metric Summary Dashboard Bar (Symmetrical 2x2 Grid on Compact / 4-Card Horizontal Grid on Expanded)
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    SummaryMetricCard(
-                        label = s.estimatedTime,
-                        value = formatDuration(estimatedMinutes, s),
-                        accent = CoralPrimary,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SummaryMetricCard(
-                        label = s.tasksRemaining,
-                        value = remainingCount.toString(),
-                        accent = SunlightGold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SummaryMetricCard(
-                        label = s.elapsedFocusTime,
-                        value = formatDuration(elapsedMinutes, s),
-                        accent = PriorityLowColor,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SummaryMetricCard(
-                        label = s.completedTasks,
-                        value = completedCount.toString(),
-                        accent = ForestEmerald,
-                        modifier = Modifier.weight(1f)
-                    )
+                if (isCompact) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SummaryMetricCard(
+                                label = s.estimatedTime,
+                                value = formatDuration(estimatedMinutes, s),
+                                accent = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            SummaryMetricCard(
+                                label = s.tasksRemaining,
+                                value = remainingCount.toString(),
+                                accent = SunlightGold,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SummaryMetricCard(
+                                label = s.elapsedFocusTime,
+                                value = formatDuration(elapsedMinutes, s),
+                                accent = PriorityLowColor,
+                                modifier = Modifier.weight(1f)
+                            )
+                            SummaryMetricCard(
+                                label = s.completedTasks,
+                                value = completedCount.toString(),
+                                accent = ForestEmerald,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        SummaryMetricCard(
+                            label = s.estimatedTime,
+                            value = formatDuration(estimatedMinutes, s),
+                            accent = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SummaryMetricCard(
+                            label = s.tasksRemaining,
+                            value = remainingCount.toString(),
+                            accent = SunlightGold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SummaryMetricCard(
+                            label = s.elapsedFocusTime,
+                            value = formatDuration(elapsedMinutes, s),
+                            accent = PriorityLowColor,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SummaryMetricCard(
+                            label = s.completedTasks,
+                            value = completedCount.toString(),
+                            accent = ForestEmerald,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
 
@@ -342,16 +411,16 @@ fun MainTaskWorkspace(
             if (uiState.destination != NavDestination.SmartList(SmartListType.COMPLETED)) {
                 item {
                     Surface(
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colorScheme.surface,
                         tonalElevation = 2.dp,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 OutlinedTextField(
                                     value = quickTitle,
@@ -367,7 +436,7 @@ fun MainTaskWorkspace(
                                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                                     keyboardActions = KeyboardActions(onDone = { submitQuickTask() }),
                                     colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = CoralPrimary,
+                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
                                         unfocusedBorderColor = Color.Transparent
                                     ),
                                     modifier = Modifier
@@ -375,22 +444,22 @@ fun MainTaskWorkspace(
                                         .testTag("quick_add_input")
                                 )
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = if (quickTitle.isNotBlank()) CoralPrimary else MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = CircleShape,
+                                    color = if (quickTitle.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
                                     modifier = Modifier
                                         .minimumInteractiveComponentSize()
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .clip(CircleShape)
                                         .clickable(enabled = quickTitle.isNotBlank()) { submitQuickTask() }
                                         .testTag("quick_add_submit_button")
                                 ) {
                                     Box(
                                         contentAlignment = Alignment.Center,
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Add,
                                             contentDescription = s.add,
-                                            tint = if (quickTitle.isNotBlank()) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                                            tint = if (quickTitle.isNotBlank()) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
                                         )
                                     }
                                 }
@@ -430,17 +499,20 @@ fun MainTaskWorkspace(
                                     }
                                 }
 
-                                // Due Date Picker Chip
+                                // Due Date & Time Picker Chip
                                 Box {
                                     val dateText = when {
                                         quickIsSomeday -> s.someday
-                                        quickDueEpochDay != null -> DateUtils.formatEpochDay(quickDueEpochDay!!, isArabic)
+                                        quickDueEpochDay != null -> {
+                                            val d = DateUtils.formatEpochDay(quickDueEpochDay!!, isArabic)
+                                            if (quickReminderTime != null) "$d • $quickReminderTime" else d
+                                        }
                                         else -> s.dueDate
                                     }
                                     QuickSelectorPill(
                                         icon = Icons.Default.CalendarToday,
                                         label = dateText,
-                                        tint = ForestEmerald,
+                                        tint = MaterialTheme.colorScheme.primary,
                                         onClick = { dateMenuOpen = true }
                                     )
                                     DropdownMenu(expanded = dateMenuOpen, onDismissRequest = { dateMenuOpen = false }) {
@@ -465,6 +537,7 @@ fun MainTaskWorkspace(
                                             onClick = {
                                                 quickIsSomeday = true
                                                 quickDueEpochDay = null
+                                                quickReminderTime = null
                                                 dateMenuOpen = false
                                             }
                                         )
@@ -574,8 +647,9 @@ fun MainTaskWorkspace(
             if (activeTasks.isEmpty() && completedTasks.isEmpty()) {
                 item {
                     Surface(
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 24.dp)
@@ -587,7 +661,7 @@ fun MainTaskWorkspace(
                             Icon(
                                 imageVector = Icons.Default.CheckCircleOutline,
                                 contentDescription = null,
-                                tint = CoralPrimary.copy(alpha = 0.6f),
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                                 modifier = Modifier.size(54.dp)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
@@ -680,26 +754,18 @@ fun MainTaskWorkspace(
     }
 
     if (showCustomDatePicker) {
-        val datePickerState = rememberDatePickerState()
-        DatePickerDialog(
-            onDismissRequest = { showCustomDatePicker = false },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        datePickerState.selectedDateMillis?.let { millis ->
-                            quickIsSomeday = false
-                            quickDueEpochDay = millis / 86_400_000L
-                        }
-                        showCustomDatePicker = false
-                    }
-                ) { Text(s.save) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCustomDatePicker = false }) { Text(s.cancel) }
+        UnifiedDateTimePickerDialog(
+            initialEpochDay = quickDueEpochDay ?: today,
+            initialReminderTime = quickReminderTime,
+            isArabic = isArabic,
+            onDismiss = { showCustomDatePicker = false },
+            onConfirm = { pickedDay, pickedTime ->
+                quickIsSomeday = false
+                quickDueEpochDay = pickedDay
+                quickReminderTime = pickedTime
+                showCustomDatePicker = false
             }
-        ) {
-            DatePicker(state = datePickerState)
-        }
+        )
     }
 }
 
@@ -711,10 +777,10 @@ private fun SummaryMetricCard(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 1.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         modifier = modifier
     ) {
         Column(
@@ -789,15 +855,15 @@ fun TaskRowCard(
     val priorityColor = task.priority.color()
     val borderColor by animateColorAsState(
         targetValue = when {
-            isActiveFocusTask -> CoralPrimary
-            isSelectedForInspect -> CoralPrimary.copy(alpha = 0.7f)
-            else -> MaterialTheme.colorScheme.outlineVariant
+            isActiveFocusTask -> MaterialTheme.colorScheme.primary
+            isSelectedForInspect -> MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+            else -> MaterialTheme.colorScheme.outline
         },
         label = "taskBorder"
     )
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(20.dp),
         color = if (task.isCompleted) {
             MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
         } else {
@@ -807,17 +873,17 @@ fun TaskRowCard(
         tonalElevation = if (isSelectedForInspect) 3.dp else 1.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClickInspect)
             .testTag("task_item_card_${task.id}")
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 10.dp),
+                .padding(horizontal = 12.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Color-coded Priority Checkbox (48dp touch area)
+            // Smooth Circular Checkbox (48dp touch area)
             Box(
                 modifier = Modifier
                     .size(44.dp)
@@ -853,17 +919,31 @@ fun TaskRowCard(
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Text(
-                    text = task.title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
-                    textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
-                    color = if (task.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (task.priority != TaskPriority.NONE) {
+                        Icon(
+                            imageVector = Icons.Default.Flag,
+                            contentDescription = task.priority.label(s),
+                            tint = priorityColor,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    Text(
+                        text = task.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
+                        color = if (task.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
 
                 // Metadata & Tags Row
                 FlowRow(
@@ -886,7 +966,7 @@ fun TaskRowCard(
                             Text(
                                 text = "+${task.estimatedPomodoros - 6}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = CoralPrimary
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                         if (task.elapsedFocusMinutes > 0) {
@@ -929,15 +1009,47 @@ fun TaskRowCard(
                         )
                     }
 
-                    // Due Date
-                    if (task.dueDateEpochDay != null) {
-                        val isOverdue = !task.isCompleted && task.dueDateEpochDay < DateUtils.todayEpochDay()
-                        Text(
-                            text = DateUtils.formatEpochDay(task.dueDateEpochDay, isArabic),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isOverdue) CoralPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (isOverdue) FontWeight.Bold else FontWeight.Normal
-                        )
+                    // Due Date & Exact Reminder Time (HH:mm) Badge
+                    if (task.dueDateEpochDay != null || !task.reminderTime.isNullOrBlank()) {
+                        val isOverdue = !task.isCompleted &&
+                            task.dueDateEpochDay != null &&
+                            task.dueDateEpochDay < DateUtils.todayEpochDay()
+                        val datePart = task.dueDateEpochDay?.let { DateUtils.formatEpochDay(it, isArabic) }
+                        val timePart = task.reminderTime?.takeIf { it.isNotBlank() }
+                        val badgeLabel = when {
+                            datePart != null && timePart != null -> "$datePart $timePart"
+                            datePart != null -> datePart
+                            else -> timePart ?: ""
+                        }
+                        val badgeColor = when {
+                            isOverdue -> MaterialTheme.colorScheme.error
+                            timePart != null -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                        Surface(
+                            shape = CircleShape,
+                            color = badgeColor.copy(alpha = 0.14f)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CalendarToday,
+                                    contentDescription = null,
+                                    tint = badgeColor,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Text(
+                                    text = badgeLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    color = badgeColor,
+                                    fontWeight = if (isOverdue || timePart != null) FontWeight.Bold else FontWeight.Medium
+                                )
+                            }
+                        }
                     }
 
                     // Project Pill
@@ -984,7 +1096,7 @@ fun TaskRowCard(
             if (!task.isCompleted) {
                 Surface(
                     shape = CircleShape,
-                    color = if (isActiveFocusTask) CoralPrimary else CoralPrimary.copy(alpha = 0.12f),
+                    color = if (isActiveFocusTask) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
                     modifier = Modifier
                         .size(42.dp)
                         .clip(CircleShape)
@@ -995,7 +1107,7 @@ fun TaskRowCard(
                         Icon(
                             imageVector = Icons.Default.PlayArrow,
                             contentDescription = s.start,
-                            tint = if (isActiveFocusTask) Color.White else CoralPrimary,
+                            tint = if (isActiveFocusTask) Color.White else MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(22.dp)
                         )
                     }

@@ -10,16 +10,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 private val FocusDarkColorScheme = darkColorScheme(
-    primary = CoralPrimary,
-    onPrimary = Color.White,
+    primary = RoyalBlueDarkTheme,
+    onPrimary = Color(0xFFFFFFFF),
     primaryContainer = CoralContainerDark,
-    onPrimaryContainer = CoralLight,
-    secondary = ForestEmerald,
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFF0F3D31),
-    onSecondaryContainer = Color(0xFF6EE7B7),
-    tertiary = LongBreakColor,
-    onTertiary = Color.White,
+    onPrimaryContainer = Color(0xFFE3E3E3),
+    secondary = RoyalBlueAccentDark,
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = DarkSurfaceVariant,
+    onSecondaryContainer = DarkCancelButtonText,
+    tertiary = RoyalBlueDarkTheme,
+    onTertiary = Color(0xFFFFFFFF),
     background = DarkBackground,
     onBackground = DarkTextPrimary,
     surface = DarkSurface,
@@ -27,21 +27,21 @@ private val FocusDarkColorScheme = darkColorScheme(
     surfaceVariant = DarkSurfaceVariant,
     onSurfaceVariant = DarkTextSecondary,
     outline = DarkOutline,
-    outlineVariant = Color(0xFF232B35),
+    outlineVariant = DarkOutline,
     error = PriorityHighColor
 )
 
 private val FocusLightColorScheme = lightColorScheme(
-    primary = CoralPrimary,
-    onPrimary = Color.White,
+    primary = RoyalBlueLightTheme,
+    onPrimary = Color(0xFFFFFFFF),
     primaryContainer = CoralContainerLight,
-    onPrimaryContainer = CoralDark,
-    secondary = ForestEmerald,
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFD1FAE5),
-    onSecondaryContainer = Color(0xFF065F46),
-    tertiary = LongBreakColor,
-    onTertiary = Color.White,
+    onPrimaryContainer = Color(0xFF174EA6),
+    secondary = RoyalBlueLightTheme,
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = LightSurfaceVariant,
+    onSecondaryContainer = LightTextPrimary,
+    tertiary = RoyalBlueLightTheme,
+    onTertiary = Color(0xFFFFFFFF),
     background = LightBackground,
     onBackground = LightTextPrimary,
     surface = LightSurface,
@@ -49,14 +49,14 @@ private val FocusLightColorScheme = lightColorScheme(
     surfaceVariant = LightSurfaceVariant,
     onSurfaceVariant = LightTextSecondary,
     outline = LightOutline,
-    outlineVariant = Color(0xFFEFF3F8),
+    outlineVariant = LightSurfaceVariant,
     error = PriorityHighColor
 )
 
 val FocusShapes = Shapes(
-    extraSmall = RoundedCornerShape(6.dp),
-    small = RoundedCornerShape(10.dp),
-    medium = RoundedCornerShape(14.dp),
+    extraSmall = RoundedCornerShape(10.dp),
+    small = RoundedCornerShape(14.dp),
+    medium = RoundedCornerShape(20.dp),
     large = RoundedCornerShape(20.dp),
     extraLarge = RoundedCornerShape(28.dp)
 )

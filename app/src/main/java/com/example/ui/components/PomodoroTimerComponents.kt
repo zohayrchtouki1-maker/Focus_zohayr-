@@ -117,7 +117,7 @@ fun FloatingMiniTimerBar(
         timer.remainingSeconds
     }
     val accent = when (timer.phase) {
-        TimerPhase.FOCUS -> CoralPrimary
+        TimerPhase.FOCUS -> MaterialTheme.colorScheme.primary
         TimerPhase.SHORT_BREAK -> ShortBreakColor
         TimerPhase.LONG_BREAK -> LongBreakColor
     }
@@ -129,14 +129,14 @@ fun FloatingMiniTimerBar(
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(24.dp),
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 8.dp,
             shadowElevation = 10.dp,
-            border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
+                .clip(RoundedCornerShape(24.dp))
                 .clickable(onClick = onExpand)
                 .testTag("mini_timer_bar")
         ) {
@@ -192,7 +192,7 @@ fun FloatingMiniTimerBar(
                 val pauseBlocked = timer.strictMode && timer.phase == TimerPhase.FOCUS && timer.isRunning
                 Surface(
                     shape = CircleShape,
-                    color = accent,
+                    color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
                         .size(44.dp)
                         .clip(CircleShape)
@@ -273,9 +273,9 @@ fun FullScreenTimerOverlay(
         label = "gradBottom"
     )
     val ringAccent = when (timer.phase) {
-        TimerPhase.FOCUS -> Color(0xFFFF6B61)
-        TimerPhase.SHORT_BREAK -> Color(0xFF2DD4BF)
-        TimerPhase.LONG_BREAK -> Color(0xFF818CF8)
+        TimerPhase.FOCUS -> Color(0xFF4A6EE0)
+        TimerPhase.SHORT_BREAK -> Color(0xFF3B5998)
+        TimerPhase.LONG_BREAK -> Color(0xFF6384F2)
     }
 
     val isStopwatch = timer.countMode == TimerCountMode.STOPWATCH && timer.phase == TimerPhase.FOCUS
@@ -481,7 +481,7 @@ fun FullScreenTimerOverlay(
                     Button(
                         onClick = onStartOrResume,
                         colors = ButtonDefaults.buttonColors(containerColor = ringAccent, contentColor = Color.White),
-                        shape = RoundedCornerShape(28.dp),
+                        shape = CircleShape,
                         modifier = Modifier
                             .height(54.dp)
                             .width(170.dp)
@@ -495,8 +495,8 @@ fun FullScreenTimerOverlay(
                     if (!(timer.strictMode && timer.phase == TimerPhase.FOCUS)) {
                         Button(
                             onClick = onPause,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.22f), contentColor = Color.White),
-                            shape = RoundedCornerShape(28.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A2B2F), contentColor = Color(0xFFE2E2E6)),
+                            shape = CircleShape,
                             modifier = Modifier.height(52.dp).testTag("timer_pause_button")
                         ) {
                             Icon(Icons.Default.Pause, null)
@@ -513,9 +513,12 @@ fun FullScreenTimerOverlay(
                                 onStop()
                             }
                         },
-                        border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.45f)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        shape = RoundedCornerShape(28.dp),
+                        border = BorderStroke(1.5.dp, Color(0xFF2C2D30)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color(0xFF2A2B2F),
+                            contentColor = Color(0xFFE2E2E6)
+                        ),
+                        shape = CircleShape,
                         modifier = Modifier.height(52.dp).testTag("timer_stop_button")
                     ) {
                         Icon(Icons.Default.Stop, null)
@@ -527,7 +530,7 @@ fun FullScreenTimerOverlay(
                     Button(
                         onClick = onStartOrResume,
                         colors = ButtonDefaults.buttonColors(containerColor = ringAccent, contentColor = Color.White),
-                        shape = RoundedCornerShape(28.dp),
+                        shape = CircleShape,
                         modifier = Modifier.height(52.dp).testTag("timer_resume_button")
                     ) {
                         Icon(Icons.Default.PlayArrow, null)
@@ -537,9 +540,12 @@ fun FullScreenTimerOverlay(
 
                     OutlinedButton(
                         onClick = onStop,
-                        border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.45f)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        shape = RoundedCornerShape(28.dp),
+                        border = BorderStroke(1.5.dp, Color(0xFF2C2D30)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color(0xFF2A2B2F),
+                            contentColor = Color(0xFFE2E2E6)
+                        ),
+                        shape = CircleShape,
                         modifier = Modifier.height(52.dp)
                     ) {
                         Icon(Icons.Default.Stop, null)
@@ -551,9 +557,12 @@ fun FullScreenTimerOverlay(
                 if (timer.phase != TimerPhase.FOCUS) {
                     OutlinedButton(
                         onClick = onSkipBreak,
-                        border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.45f)),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        shape = RoundedCornerShape(28.dp),
+                        border = BorderStroke(1.5.dp, Color(0xFF2C2D30)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color(0xFF2A2B2F),
+                            contentColor = Color(0xFFE2E2E6)
+                        ),
+                        shape = CircleShape,
                         modifier = Modifier.height(52.dp)
                     ) {
                         Icon(Icons.Default.FastForward, null)
@@ -641,7 +650,11 @@ fun FullScreenTimerOverlay(
 
     // Task Switcher Sheet
     if (showTaskPicker) {
-        ModalBottomSheet(onDismissRequest = { showTaskPicker = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { showTaskPicker = false },
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -655,11 +668,12 @@ fun FullScreenTimerOverlay(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (timer.activeTaskId == null) CoralPrimary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (timer.activeTaskId == null) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(20.dp))
                         .clickable {
                             onSelectTask(null)
                             showTaskPicker = false
@@ -670,7 +684,7 @@ fun FullScreenTimerOverlay(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(s.freeFocus, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                        if (timer.activeTaskId == null) Icon(Icons.Default.Check, null, tint = CoralPrimary)
+                        if (timer.activeTaskId == null) Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
                     }
                 }
 
@@ -684,11 +698,12 @@ fun FullScreenTimerOverlay(
                     items(incompleteTasks, key = { it.id }) { t ->
                         val selected = timer.activeTaskId == t.id
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (selected) CoralPrimary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            shape = RoundedCornerShape(20.dp),
+                            color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(20.dp))
                                 .clickable {
                                     onSelectTask(t.id)
                                     showTaskPicker = false
@@ -723,7 +738,11 @@ fun FullScreenTimerOverlay(
 
     // White Noise Mixer Sheet
     if (showNoiseMixer) {
-        ModalBottomSheet(onDismissRequest = { showNoiseMixer = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { showNoiseMixer = false },
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
