@@ -1,5 +1,8 @@
 package com.example.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -20,15 +23,18 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -39,10 +45,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -68,6 +79,17 @@ fun AccountAuthDialog(
     onManualSync: () -> Unit
 ) {
     BackHandler { onDismiss() }
+
+    val context = LocalContext.current
+    val runtimePackageName = remember(context) { context.packageName }
+    val runtimeSha1 = remember(context) { FocusRepository.getRuntimeSigningSha1(context) }
+    var copiedField by remember { mutableStateOf<String?>(null) }
+
+    fun copyToClipboard(label: String, text: String, key: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+        copiedField = key
+    }
 
     val isArabic = language == AppLanguage.AR
     val primaryRoyalBlue = MaterialTheme.colorScheme.primary
@@ -218,6 +240,135 @@ fun AccountAuthDialog(
                                 color = badgeTint,
                                 fontWeight = FontWeight.Bold
                             )
+                        }
+                    }
+
+                    // Runtime Package Name & Signing Certificate SHA-1 Fingerprint Card
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+                        border = BorderStroke(1.dp, borderCol),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("runtime_signing_info_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = if (isArabic) {
+                                        "بيانات حزمة التطبيق وبصمة SHA-1 الفعلية (Google Cloud Console)"
+                                    } else {
+                                        "Runtime Package & SHA-1 (Google Cloud Console)"
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            // Package Name row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Package Name (context.packageName)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    SelectionContainer {
+                                        Text(
+                                            text = runtimePackageName,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.testTag("runtime_package_name_text")
+                                        )
+                                    }
+                                }
+                                Button(
+                                    onClick = {
+                                        copyToClipboard("Package Name", runtimePackageName, "pkg")
+                                    },
+                                    shape = CircleShape,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = secondaryBtnBg,
+                                        contentColor = secondaryBtnText
+                                    ),
+                                    modifier = Modifier.testTag("copy_package_name_button")
+                                ) {
+                                    Icon(
+                                        imageVector = if (copiedField == "pkg") Icons.Default.Check else Icons.Default.ContentCopy,
+                                        contentDescription = "Copy Package Name",
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (copiedField == "pkg") "Copied" else "Copy",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            // SHA-1 Fingerprint row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Signing Certificate SHA-1",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    SelectionContainer {
+                                        Text(
+                                            text = runtimeSha1,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = primaryRoyalBlue,
+                                            modifier = Modifier.testTag("runtime_sha1_text")
+                                        )
+                                    }
+                                }
+                               Spacer(modifier = Modifier.width(8.dp))
+                                Button(
+                                    onClick = {
+                                        copyToClipboard("Signing SHA-1", runtimeSha1, "sha1")
+                                    },
+                                    shape = CircleShape,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = primaryRoyalBlue,
+                                        contentColor = Color.White
+                                    ),
+                                    modifier = Modifier.testTag("copy_sha1_button")
+                                ) {
+                                    Icon(
+                                        imageVector = if (copiedField == "sha1") Icons.Default.Check else Icons.Default.ContentCopy,
+                                        contentDescription = "Copy SHA-1",
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (copiedField == "sha1") "Copied!" else "Copy SHA-1",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
 

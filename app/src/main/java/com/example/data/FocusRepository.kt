@@ -42,7 +42,41 @@ data class ActiveUserSession(
 class FocusRepository(private val context: Context) {
     companion object {
         const val DRIVE_BACKUP_FILE_NAME = "focus_todo_backup.json"
-        const val WEB_CLIENT_ID = "452070073350-53h2d4c9tq23gfr3pmjpr11chbgccm8i.apps.googleusercontent.com"
+
+        @Suppress("DEPRECATION")
+        fun getRuntimeSigningSha1(context: Context): String {
+            return try {
+                val pm = context.packageManager
+                val pkgName = context.packageName
+                val signatureBytes: ByteArray? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    val pkgInfo = pm.getPackageInfo(pkgName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+                    val signingInfo = pkgInfo.signingInfo
+                    val signers = if (signingInfo != null) {
+                        if (signingInfo.hasMultipleSigners()) {
+                            signingInfo.apkContentsSigners
+                        } else {
+                            signingInfo.signingCertificateHistory
+                        }
+                    } else {
+                        null
+                    }
+                    signers?.firstOrNull()?.toByteArray()
+                } else {
+                    val pkgInfo = pm.getPackageInfo(pkgName, android.content.pm.PackageManager.GET_SIGNATURES)
+                    pkgInfo.signatures?.firstOrNull()?.toByteArray()
+                }
+
+                if (signatureBytes == null) {
+                    "Unavailable"
+                } else {
+                    val md = java.security.MessageDigest.getInstance("SHA-1")
+                    val digest = md.digest(signatureBytes)
+                    digest.joinToString(":") { byte -> "%02X".format(byte) }
+                }
+            } catch (e: Exception) {
+                "Error: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
     }
 
     private val moshi: Moshi = Moshi.Builder()
@@ -62,7 +96,6 @@ class FocusRepository(private val context: Context) {
 
     fun getGoogleSignInOptions(): GoogleSignInOptions {
         return GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(WEB_CLIENT_ID)
             .requestEmail()
             .requestScopes(Scope(DriveScopes.DRIVE_APPDATA))
             .build()
