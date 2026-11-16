@@ -1,43 +1,50 @@
 package com.example.data
 
 import android.content.Context
-import com.example.BuildConfig
 import com.example.model.AppBackupState
+import com.google.android.gms.tasks.Task
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.EmailAuthProvider
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreSettings
+import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.PersistentCacheSettings
+import com.google.firebase.firestore.Source
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
+import kotlinx.coroutines.withTimeout
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
-import java.security.MessageDigest
-import java.util.Locale
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 enum class CloudSyncStatus {
     UNAUTHENTICATED,
     SYNCING,
     SYNCED,
-    OFFLINE_CACHED
+    SYNC_FAILED
 }
-
-data class LocalAccountRecord(
-    val userId: String = "",
-    val email: String = "",
-    val passwordHash: String = "",
-    val createdAtEpochMillis: Long = System.currentTimeMillis()
-)
 
 data class ActiveUserSession(
     val userId: String,
-    val email: String,
-    val idToken: String? = null,
-    val refreshToken: String? = null,
-    val tokenExpiresAtEpochMillis: Long = 0L,
-    val lastSyncedEpochMillis: Long = 0L,
-    val pendingCloudPush: Boolean = false
+    val email: String
 )
+
+private suspend fun <T> Task<T>.awaitTask(): T = suspendCancellableCoroutine { cont ->
+    addOnCompleteListener { task ->
+        if (task.isSuccessful) {
+            cont.resume(task.result)
+        } else {
+            cont.resumeWithException(
+                task.exception ?: IllegalStateException("Firebase task failed without exception")
+            )
+        }
+    }
+}
 
 class FocusRepository(private val context: Context) {
     private val moshi: Moshi = Moshi.Builder()
@@ -45,48 +52,8 @@ class FocusRepository(private val context: Context) {
         .build()
 
     private val adapter = moshi.adapter(AppBackupState::class.java).indent("  ")
-    private val accountListType = Types.newParameterizedType(List::class.java, LocalAccountRecord::class.java)
-    private val accountsAdapter = moshi.adapter<List<LocalAccountRecord>>(accountListType).indent("  ")
-    private val sessionAdapter = moshi.adapter(ActiveUserSession::class.java).indent("  ")
 
     private val rootStateFile: File get() = File(context.filesDir, "focus_todo_state.json")
-    private val accountsFile: File get() = File(context.filesDir, "focus_accounts.json")
-    private val activeSessionFile: File get() = File(context.filesDir, "focus_active_session.json")
-    private val customApiKeyFile: File get() = File(context.filesDir, "focus_firebase_api_key.txt")
-
-    val firebaseProjectId: String
-        get() = BuildConfig.FIREBASE_PROJECT_ID.takeIf {
-            it.isNotBlank() && it != "YOUR_FIREBASE_PROJECT_ID"
-        } ?: "focus-zohayr"
-
-    fun getResolvedFirebaseApiKey(): String {
-        val fromBuildConfig = BuildConfig.FIREBASE_WEB_API_KEY.trim()
-        if (fromBuildConfig.isNotBlank() &&
-            fromBuildConfig != "YOUR_FIREBASE_WEB_API_KEY" &&
-            fromBuildConfig != "MY_FIREBASE_WEB_API_KEY"
-        ) {
-            return fromBuildConfig
-        }
-        return try {
-            if (customApiKeyFile.exists()) {
-                customApiKeyFile.readText(Charsets.UTF_8).trim()
-            } else {
-                ""
-            }
-        } catch (_: Exception) {
-            ""
-        }
-    }
-
-    fun saveCustomFirebaseApiKey(apiKey: String) {
-        try {
-            val cleaned = apiKey.trim()
-            if (cleaned.isNotEmpty()) {
-                customApiKeyFile.writeText(cleaned, Charsets.UTF_8)
-            }
-        } catch (_: Exception) {
-        }
-    }
 
     private fun userStateFile(userId: String): File {
         val dir = File(context.filesDir, "users/$userId")
@@ -94,10 +61,53 @@ class FocusRepository(private val context: Context) {
         return File(dir, "focus_todo_state.json")
     }
 
-    private fun userMetaFile(userId: String): File {
-        val dir = File(context.filesDir, "users/$userId")
-        if (!dir.exists()) dir.mkdirs()
-        return File(dir, "sync_meta.json")
+    private val firebaseAuth: FirebaseAuth? by lazy {
+        try {
+            if (FirebaseApp.getApps(context).isEmpty()) {
+                FirebaseApp.initializeApp(context)
+            }
+            FirebaseAuth.getInstance()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private val firestore: FirebaseFirestore? by lazy {
+        try {
+            if (FirebaseApp.getApps(context).isEmpty()) {
+                FirebaseApp.initializeApp(context)
+            }
+            FirebaseFirestore.getInstance().apply {
+                try {
+                    val settings = FirebaseFirestoreSettings.Builder()
+                        .setLocalCacheSettings(PersistentCacheSettings.newBuilder().build())
+                        .build()
+                    firestoreSettings = settings
+                } catch (_: Exception) {
+                    // Settings already locked/configured on this instance
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    val firebaseProjectId: String
+        get() = try {
+            if (FirebaseApp.getApps(context).isEmpty()) {
+                FirebaseApp.initializeApp(context)
+            }
+            FirebaseApp.getInstance().options.projectId ?: "focus-zohayr"
+        } catch (_: Exception) {
+            "focus-zohayr"
+        }
+
+    fun getActiveSessionSync(): ActiveUserSession? {
+        val user: FirebaseUser = firebaseAuth?.currentUser ?: return null
+        return ActiveUserSession(
+            userId = user.uid,
+            email = user.email ?: ""
+        )
     }
 
     private fun activeStateFile(): File {
@@ -105,185 +115,237 @@ class FocusRepository(private val context: Context) {
         return if (session != null) userStateFile(session.userId) else rootStateFile
     }
 
-    fun getActiveSessionSync(): ActiveUserSession? {
-        return try {
-            if (activeSessionFile.exists()) {
-                sessionAdapter.fromJson(activeSessionFile.readText(Charsets.UTF_8))
-            } else {
-                null
+    /**
+     * Real Firebase Authentication Sign Up (`createUserWithEmailAndPassword`) +
+     * automatic migration of any existing local data into `users/{userId}` in Cloud Firestore.
+     */
+    suspend fun signUp(email: String, password: String): Result< Pair<ActiveUserSession, AppBackupState> > =
+        withContext(Dispatchers.IO) {
+            val cleanEmail = email.trim()
+            if (cleanEmail.isBlank() || !cleanEmail.contains("@")) {
+                return@withContext Result.failure(IllegalArgumentException("Please enter a valid email address."))
             }
-        } catch (_: Exception) {
-            null
-        }
-    }
+            if (password.length < 6) {
+                return@withContext Result.failure(IllegalArgumentException("Password must be at least 6 characters."))
+            }
 
-    suspend fun signUp(email: String, password: String): Result<ActiveUserSession> = withContext(Dispatchers.IO) {
-        val normalizedEmail = email.trim().lowercase(Locale.ROOT)
-        if (normalizedEmail.isBlank() || !normalizedEmail.contains("@")) {
-            return@withContext Result.failure(IllegalArgumentException("INVALID_EMAIL"))
-        }
-        if (password.length < 6) {
-            return@withContext Result.failure(IllegalArgumentException("WEAK_PASSWORD"))
-        }
+            val auth = firebaseAuth
+                ?: return@withContext Result.failure(IllegalStateException("FirebaseAuth is not initialized."))
 
-        val apiKey = getResolvedFirebaseApiKey()
-        if (apiKey.isNotBlank()) {
-            val remoteResult = firebaseRestAuth(
-                endpointAction = "signUp",
-                email = email.trim(),
-                password = password,
-                apiKey = apiKey
-            )
-            if (remoteResult.isSuccess) {
-                val session = remoteResult.getOrThrow()
-                cacheLocalAccountCredentials(session.userId, session.email, password)
-                saveActiveSessionSync(session)
-                migrateAndSyncFirstLogin(session)
-                return@withContext Result.success(getActiveSessionSync() ?: session)
-            } else {
-                val errMsg = remoteResult.exceptionOrNull()?.message ?: ""
-                if (errMsg == "EMAIL_EXISTS" || errMsg == "INVALID_EMAIL" || errMsg == "WEAK_PASSWORD") {
-                    return@withContext Result.failure(IllegalStateException(errMsg))
-                }
-                // If network is unreachable, fall through to offline-capable account creation
-                if (!errMsg.startsWith("NETWORK_")) {
-                    return@withContext Result.failure(IllegalStateException(errMsg.ifBlank { "AUTH_FAILED" }))
-                }
+            try {
+                val authResult = auth.createUserWithEmailAndPassword(cleanEmail, password).awaitTask()
+                val user = authResult.user
+                    ?: return@withContext Result.failure(IllegalStateException("User creation returned null user."))
+                val session = ActiveUserSession(userId = user.uid, email = user.email ?: cleanEmail)
+                val migratedState = migrateAndSyncOnLogin(session)
+                Result.success(session to migratedState)
+            } catch (e: Exception) {
+                Result.failure(e)
             }
         }
 
-        // Offline cache fallback when network is unavailable or key is configured later
-        val accounts = loadAccountsSync().toMutableList()
-        if (accounts.any { it.email.equals(normalizedEmail, ignoreCase = true) }) {
-            return@withContext Result.failure(IllegalStateException("EMAIL_EXISTS"))
-        }
+    /**
+     * Real Firebase Authentication Sign In (`EmailAuthProvider.getCredential` + `signInWithCredential`) +
+     * automatic migration/merge with `users/{userId}` in Cloud Firestore.
+     */
+    suspend fun signIn(email: String, password: String): Result< Pair<ActiveUserSession, AppBackupState> > =
+        withContext(Dispatchers.IO) {
+            val cleanEmail = email.trim()
+            if (cleanEmail.isBlank() || !cleanEmail.contains("@")) {
+                return@withContext Result.failure(IllegalArgumentException("Please enter a valid email address."))
+            }
+            if (password.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Please enter your password."))
+            }
 
-        val uid = "uid_" + sha256(normalizedEmail).take(18)
-        cacheLocalAccountCredentials(uid, email.trim(), password)
-        migrateLocalDataToUserIfNeeded(uid)
+            val auth = firebaseAuth
+                ?: return@withContext Result.failure(IllegalStateException("FirebaseAuth is not initialized."))
 
-        val session = ActiveUserSession(
-            userId = uid,
-            email = email.trim(),
-            pendingCloudPush = true
-        )
-        saveActiveSessionSync(session)
-        Result.success(session)
-    }
-
-    suspend fun signIn(email: String, password: String): Result<ActiveUserSession> = withContext(Dispatchers.IO) {
-        val normalizedEmail = email.trim().lowercase(Locale.ROOT)
-        if (normalizedEmail.isBlank() || !normalizedEmail.contains("@")) {
-            return@withContext Result.failure(IllegalArgumentException("INVALID_EMAIL"))
-        }
-        if (password.isEmpty()) {
-            return@withContext Result.failure(IllegalArgumentException("EMPTY_PASSWORD"))
-        }
-
-        val apiKey = getResolvedFirebaseApiKey()
-        if (apiKey.isNotBlank()) {
-            val remoteResult = firebaseRestAuth(
-                endpointAction = "sign" + "InWithPassword",
-                email = email.trim(),
-                password = password,
-                apiKey = apiKey
-            )
-            if (remoteResult.isSuccess) {
-                val session = remoteResult.getOrThrow()
-                cacheLocalAccountCredentials(session.userId, session.email, password)
-                saveActiveSessionSync(session)
-                migrateAndSyncFirstLogin(session)
-                return@withContext Result.success(getActiveSessionSync() ?: session)
-            } else {
-                val errMsg = remoteResult.exceptionOrNull()?.message ?: ""
-                if (errMsg == "ACCOUNT_NOT_FOUND" || errMsg == "WRONG_PASSWORD" || errMsg == "INVALID_LOGIN_CREDENTIALS") {
-                    return@withContext Result.failure(IllegalStateException("WRONG_PASSWORD"))
-                }
-                if (!errMsg.startsWith("NETWORK_")) {
-                    return@withContext Result.failure(IllegalStateException(errMsg.ifBlank { "AUTH_FAILED" }))
-                }
+            try {
+                val credential = EmailAuthProvider.getCredential(cleanEmail, password)
+                val authResult = auth.signInWithCredential(credential).awaitTask()
+                val user = authResult.user
+                    ?: return@withContext Result.failure(IllegalStateException("Sign-in returned null user."))
+                val session = ActiveUserSession(userId = user.uid, email = user.email ?: cleanEmail)
+                val syncedState = migrateAndSyncOnLogin(session)
+                Result.success(session to syncedState)
+            } catch (e: Exception) {
+                Result.failure(e)
             }
         }
-
-        // Offline cached account sign-in when offline
-        val accounts = loadAccountsSync()
-        val match = accounts.find { it.email.equals(normalizedEmail, ignoreCase = true) }
-            ?: return@withContext Result.failure(IllegalStateException("ACCOUNT_NOT_FOUND"))
-
-        if (match.passwordHash != sha256(password)) {
-            return@withContext Result.failure(IllegalStateException("WRONG_PASSWORD"))
-        }
-
-        migrateLocalDataToUserIfNeeded(match.userId)
-        val session = ActiveUserSession(
-            userId = match.userId,
-            email = match.email,
-            pendingCloudPush = true
-        )
-        saveActiveSessionSync(session)
-        Result.success(session)
-    }
 
     suspend fun signOut() = withContext(Dispatchers.IO) {
         try {
-            // Ensure current user's state is flushed locally before signing out
-            val session = getActiveSessionSync()
-            if (session != null) {
-                val currentFile = userStateFile(session.userId)
-                if (currentFile.exists()) {
-                    val state = adapter.fromJson(currentFile.readText(Charsets.UTF_8))
-                    if (state != null) {
-                        pushStateToFirestore(session, state)
-                    }
-                }
-            }
-            if (activeSessionFile.exists()) {
-                activeSessionFile.delete()
-            }
+            firebaseAuth?.signOut()
         } catch (_: Exception) {
         }
     }
 
     /**
-     * Migrates any existing local data (from root `focus_todo_state.json`) into the user's
-     * Firestore document `users/{userId}` and local offline cache `users/{userId}/focus_todo_state.json`
-     * so nothing is lost on first login.
+     * Attaches a real-time Firestore snapshot listener on `users/{userId}` so changes made on
+     * any other phone or device sync automatically in real time.
      */
-    private suspend fun migrateAndSyncFirstLogin(session: ActiveUserSession) {
+    fun listenToUserCloudState(
+        userId: String,
+        onRemoteStateChanged: (AppBackupState) -> Unit,
+        onError: (String) -> Unit
+    ): ListenerRegistration? {
+        val db = firestore ?: return null
+        return db.collection("users").document(userId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    onError(error.localizedMessage ?: error.message ?: "Firestore listener error")
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    val stateJson = snapshot.getString("stateJson")
+                    if (!stateJson.isNullOrBlank()) {
+                        val parsed = parseBackupJson(stateJson)?.let { cleanLegacySamples(it) }
+                        if (parsed != null) {
+                            saveStateInternal(parsed, userStateFile(userId))
+                            onRemoteStateChanged(parsed)
+                        }
+                    }
+                }
+            }
+    }
+
+    /**
+     * On first login or sign-in, fetches `users/{userId}` from Cloud Firestore, merges any
+     * pre-login local data from `focus_todo_state.json` so nothing is lost, caches locally,
+     * and writes the merged state to `users/{userId}` in Cloud Firestore.
+     */
+    private suspend fun migrateAndSyncOnLogin(session: ActiveUserSession): AppBackupState {
+        val db = firestore ?: throw IllegalStateException("FirebaseFirestore is not initialized.")
+        val docRef = db.collection("users").document(session.userId)
+
         val localAnonymousState = readStateFromFile(rootStateFile)
-        val localUserFile = userStateFile(session.userId)
-        val existingUserLocalState = readStateFromFile(localUserFile)
+        val localUserState = readStateFromFile(userStateFile(session.userId))
 
-        // Check if `users/{userId}` already exists in Cloud Firestore
-        val remoteFetch = fetchStateFromFirestore(session)
-        val remoteState = remoteFetch.getOrNull()
-
-        val baseState = when {
-            remoteState != null && existingUserLocalState != null -> {
-                mergeStates(remoteState, existingUserLocalState)
+        // Fetch from server first (falling back to Firestore offline cache only if device is offline)
+        val remoteSnapshot = try {
+            withTimeout(12_000L) {
+                docRef.get(Source.SERVER).awaitTask()
             }
-            remoteState != null && localAnonymousState != null -> {
+        } catch (serverEx: Exception) {
+            try {
+                docRef.get(Source.CACHE).awaitTask()
+            } catch (_: Exception) {
+                throw serverEx
+            }
+        }
+
+        val remoteState: AppBackupState? = if (remoteSnapshot.exists()) {
+            remoteSnapshot.getString("stateJson")?.let { parseBackupJson(it) }
+        } else {
+            null
+        }
+
+        val merged = when {
+            remoteState != null && localUserState != null -> mergeStates(remoteState, localUserState)
+            remoteState != null && localAnonymousState != null && localAnonymousState.tasks.isNotEmpty() ->
                 mergeStates(remoteState, localAnonymousState)
-            }
             remoteState != null -> remoteState
-            existingUserLocalState != null && localAnonymousState != null -> {
-                mergeStates(existingUserLocalState, localAnonymousState)
-            }
-            existingUserLocalState != null -> existingUserLocalState
+            localUserState != null && localAnonymousState != null -> mergeStates(localUserState, localAnonymousState)
+            localUserState != null -> localUserState
             localAnonymousState != null -> localAnonymousState
             else -> SeedData.createInitialState()
         }
 
-        val cleaned = cleanLegacySamples(baseState)
-        saveStateInternal(cleaned, localUserFile)
+        val cleaned = cleanLegacySamples(merged)
+        saveStateInternal(cleaned, userStateFile(session.userId))
 
-        // Push the migrated/merged state to `users/{userId}` in Cloud Firestore
-        val pushed = pushStateToFirestore(session, cleaned)
-        val updatedSession = session.copy(
-            lastSyncedEpochMillis = if (pushed) System.currentTimeMillis() else session.lastSyncedEpochMillis,
-            pendingCloudPush = !pushed
+        // Clear migrated anonymous tasks from root file so they don't re-merge into another account
+        if (localAnonymousState != null && localAnonymousState.tasks.isNotEmpty()) {
+            saveStateInternal(SeedData.createInitialState(), rootStateFile)
+        }
+
+        // Write to Cloud Firestore users/{userId} and await completion
+        pushToFirestoreOrThrow(session, cleaned)
+        return cleaned
+    }
+
+    /**
+     * Pushes `state` to `users/{userId}` in Cloud Firestore and waits for server acknowledgment.
+     */
+    suspend fun pushStateToCloud(state: AppBackupState): Result<Unit> = withContext(Dispatchers.IO) {
+        val session = getActiveSessionSync()
+            ?: return@withContext Result.failure(IllegalStateException("Not signed in."))
+        try {
+            pushToFirestoreOrThrow(session, state)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Manual "Sync Now": Pulls latest `users/{userId}` from Cloud Firestore server, merges any
+     * local state, and writes back to Cloud Firestore `users/{userId}`, returning the synced state
+     * or throwing the exact Firebase error if sync fails.
+     */
+    suspend fun forceCloudSyncNow(currentLocalState: AppBackupState): Result<AppBackupState> =
+        withContext(Dispatchers.IO) {
+            val session = getActiveSessionSync()
+                ?: return@withContext Result.failure(IllegalStateException("Not signed in. Please sign in first."))
+            val db = firestore
+                ?: return@withContext Result.failure(IllegalStateException("FirebaseFirestore is not initialized."))
+
+            try {
+                val docRef = db.collection("users").document(session.userId)
+                val serverSnap = withTimeout(12_000L) {
+                    docRef.get(Source.SERVER).awaitTask()
+                }
+
+                val remoteState = if (serverSnap.exists()) {
+                    serverSnap.getString("stateJson")?.let { parseBackupJson(it) }
+                } else {
+                    null
+                }
+
+                val remoteUpdatedAt = if (serverSnap.exists()) {
+                    serverSnap.getLong("updatedAtEpochMillis") ?: 0L
+                } else {
+                    0L
+                }
+
+                val finalState = if (remoteState != null && remoteUpdatedAt > 0L) {
+                    // Use currentLocalState as primary so local edits aren't lost, while pulling any new remote items
+                    cleanLegacySamples(mergeStates(currentLocalState, remoteState))
+                } else {
+                    cleanLegacySamples(currentLocalState)
+                }
+
+                saveStateInternal(finalState, userStateFile(session.userId))
+                pushToFirestoreOrThrow(session, finalState)
+                Result.success(finalState)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+    private suspend fun pushToFirestoreOrThrow(session: ActiveUserSession, state: AppBackupState) {
+        val db = firestore ?: throw IllegalStateException("FirebaseFirestore is not initialized.")
+        val now = System.currentTimeMillis()
+        val stateJsonString = adapter.toJson(state)
+
+        val dataMap = mapOf(
+            "userId" to session.userId,
+            "email" to session.email,
+            "updatedAtEpochMillis" to now,
+            "taskCount" to state.tasks.size,
+            "projectCount" to state.projects.size,
+            "completedTaskCount" to state.tasks.count { it.isCompleted },
+            "focusRecordCount" to state.focusRecords.size,
+            "stateJson" to stateJsonString
         )
-        saveActiveSessionSync(updatedSession)
+
+        withTimeout(12_000L) {
+            db.collection("users")
+                .document(session.userId)
+                .set(dataMap)
+                .awaitTask()
+        }
     }
 
     private fun mergeStates(primary: AppBackupState, secondary: AppBackupState): AppBackupState {
@@ -306,20 +368,6 @@ class FocusRepository(private val context: Context) {
             tags = mergedTags,
             focusRecords = mergedRecords
         )
-    }
-
-    private fun migrateLocalDataToUserIfNeeded(userId: String) {
-        try {
-            val targetFile = userStateFile(userId)
-            if (!targetFile.exists() && rootStateFile.exists()) {
-                val localState = readStateFromFile(rootStateFile)
-                if (localState != null) {
-                    val cleaned = cleanLegacySamples(localState)
-                    saveStateInternal(cleaned, targetFile)
-                }
-            }
-        } catch (_: Exception) {
-        }
     }
 
     private fun readStateFromFile(file: File): AppBackupState? {
@@ -363,342 +411,15 @@ class FocusRepository(private val context: Context) {
         initial
     }
 
-    suspend fun saveState(state: AppBackupState): Boolean = withContext(Dispatchers.IO) {
+    suspend fun saveState(state: AppBackupState): Result<Unit> = withContext(Dispatchers.IO) {
         val targetFile = activeStateFile()
         saveStateInternal(state, targetFile)
-        val session = getActiveSessionSync() ?: return@withContext false
-        writeLocalTimestamp(session.userId, System.currentTimeMillis())
-
-        val pushed = pushStateToFirestore(session, state)
-        saveActiveSessionSync(
-            session.copy(
-                lastSyncedEpochMillis = if (pushed) System.currentTimeMillis() else session.lastSyncedEpochMillis,
-                pendingCloudPush = !pushed
-            )
-        )
-        pushed
-    }
-
-    /**
-     * Synchronizes the signed-in user's `users/{userId}` document with Cloud Firestore:
-     * - If there are pending local offline changes, pushes them to Firestore first.
-     * - Otherwise pulls remote changes from `users/{userId}` if the cloud document is newer.
-     */
-    suspend fun syncWithCloudIfSignedIn(currentLocalState: AppBackupState): Pair<AppBackupState?, CloudSyncStatus> =
-        withContext(Dispatchers.IO) {
-            val session = getActiveSessionSync()
-                ?: return@withContext (null to CloudSyncStatus.UNAUTHENTICATED)
-
-            val refreshedSession = ensureValidSessionToken(session)
-            if (refreshedSession.idToken.isNullOrBlank()) {
-                return@withContext (null to CloudSyncStatus.OFFLINE_CACHED)
-            }
-
-            if (refreshedSession.pendingCloudPush) {
-                val pushed = pushStateToFirestore(refreshedSession, currentLocalState)
-                if (pushed) {
-                    val now = System.currentTimeMillis()
-                    writeLocalTimestamp(refreshedSession.userId, now)
-                    saveActiveSessionSync(
-                        refreshedSession.copy(
-                            lastSyncedEpochMillis = now,
-                            pendingCloudPush = false
-                        )
-                    )
-                    return@withContext (null to CloudSyncStatus.SYNCED)
-                } else {
-                    return@withContext (null to CloudSyncStatus.OFFLINE_CACHED)
-                }
-            }
-
-            val remoteResult = fetchStateFromFirestoreWithTimestamp(refreshedSession)
-            if (remoteResult.isFailure) {
-                return@withContext (null to CloudSyncStatus.OFFLINE_CACHED)
-            }
-
-            val pair = remoteResult.getOrNull()
-            if (pair == null) {
-                // Document does not exist on server yet; push local state now
-                val pushed = pushStateToFirestore(refreshedSession, currentLocalState)
-                val now = System.currentTimeMillis()
-                if (pushed) {
-                    writeLocalTimestamp(refreshedSession.userId, now)
-                    saveActiveSessionSync(
-                        refreshedSession.copy(
-                            lastSyncedEpochMillis = now,
-                            pendingCloudPush = false
-                        )
-                    )
-                    return@withContext (null to CloudSyncStatus.SYNCED)
-                }
-                return@withContext (null to CloudSyncStatus.OFFLINE_CACHED)
-            }
-
-            val (remoteState, remoteTimestamp) = pair
-            val localTimestamp = readLocalTimestamp(refreshedSession.userId)
-            val cleanedRemote = cleanLegacySamples(remoteState)
-
-            if (remoteTimestamp > localTimestamp + 1500L) {
-                saveStateInternal(cleanedRemote, userStateFile(refreshedSession.userId))
-                writeLocalTimestamp(refreshedSession.userId, remoteTimestamp)
-                saveActiveSessionSync(
-                    refreshedSession.copy(
-                        lastSyncedEpochMillis = System.currentTimeMillis(),
-                        pendingCloudPush = false
-                    )
-                )
-                return@withContext (cleanedRemote to CloudSyncStatus.SYNCED)
-            } else {
-                saveActiveSessionSync(
-                    refreshedSession.copy(
-                        lastSyncedEpochMillis = System.currentTimeMillis(),
-                        pendingCloudPush = false
-                    )
-                )
-                return@withContext (null to CloudSyncStatus.SYNCED)
-            }
-        }
-
-    private fun firebaseRestAuth(
-        endpointAction: String,
-        email: String,
-        password: String,
-        apiKey: String
-    ): Result<ActiveUserSession> {
-        var conn: HttpURLConnection? = null
-        return try {
-            val url = URL("https://identitytoolkit.googleapis.com/v1/accounts:$endpointAction?key=$apiKey")
-            conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 10_000
-                readTimeout = 10_000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            }
-
-            val payload = JSONObject().apply {
-                put("email", email)
-                put("password", password)
-                put("returnSecureToken", true)
-            }
-
-            conn.outputStream.use { os ->
-                os.write(payload.toString().toByteArray(Charsets.UTF_8))
-            }
-
-            val code = conn.responseCode
-            val body = if (code in 200..299) {
-                conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            } else {
-                conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-            }
-
-            if (code in 200..299) {
-                val json = JSONObject(body)
-                val localId = json.optString("localId")
-                val registeredEmail = json.optString("email", email)
-                val idToken = json.optString("idToken")
-                val refreshToken = json.optString("refreshToken")
-                val expiresInSecs = json.optString("expiresIn", "3600").toLongOrNull() ?: 3600L
-
-                Result.success(
-                    ActiveUserSession(
-                        userId = localId,
-                        email = registeredEmail,
-                        idToken = idToken,
-                        refreshToken = refreshToken,
-                        tokenExpiresAtEpochMillis = System.currentTimeMillis() + (expiresInSecs - 120L) * 1000L,
-                        lastSyncedEpochMillis = System.currentTimeMillis(),
-                        pendingCloudPush = false
-                    )
-                )
-            } else {
-                val errMessage = try {
-                    JSONObject(body).optJSONObject("error")?.optString("message") ?: "AUTH_ERROR_$code"
-                } catch (_: Exception) {
-                    "AUTH_ERROR_$code"
-                }
-                val mapped = when {
-                    errMessage.contains("EMAIL_EXISTS") -> "EMAIL_EXISTS"
-                    errMessage.contains("INVALID_EMAIL") -> "INVALID_EMAIL"
-                    errMessage.contains("WEAK_PASSWORD") -> "WEAK_PASSWORD"
-                    errMessage.contains("EMAIL_NOT_FOUND") -> "ACCOUNT_NOT_FOUND"
-                    errMessage.contains("INVALID_PASSWORD") || errMessage.contains("INVALID_LOGIN_CREDENTIALS") -> "WRONG_PASSWORD"
-                    else -> errMessage
-                }
-                Result.failure(IllegalStateException(mapped))
-            }
-        } catch (e: Exception) {
-            Result.failure(IllegalStateException("NETWORK_ERROR: ${e.message}"))
-        } finally {
-            conn?.disconnect()
-        }
-    }
-
-    private fun ensureValidSessionToken(session: ActiveUserSession): ActiveUserSession {
-        val apiKey = getResolvedFirebaseApiKey()
-        if (apiKey.isBlank()) return session
-        val now = System.currentTimeMillis()
-        if (!session.idToken.isNullOrBlank() && now < session.tokenExpiresAtEpochMillis) {
-            return session
-        }
-        val refresh = session.refreshToken ?: return session
-        var conn: HttpURLConnection? = null
-        return try {
-            val url = URL("https://securetoken.googleapis.com/v1/token?key=$apiKey")
-            conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 8_000
-                readTimeout = 8_000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            }
-            val payload = JSONObject().apply {
-                put("grant_type", "refresh_token")
-                put("refresh_token", refresh)
-            }
-            conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-            if (conn.responseCode in 200..299) {
-                val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                val json = JSONObject(body)
-                val newIdToken = json.optString("id_token", session.idToken ?: "")
-                val newRefresh = json.optString("refresh_token", refresh)
-                val expiresIn = json.optString("expires_in", "3600").toLongOrNull() ?: 3600L
-                val updated = session.copy(
-                    idToken = newIdToken,
-                    refreshToken = newRefresh,
-                    tokenExpiresAtEpochMillis = now + (expiresIn - 120L) * 1000L
-                )
-                saveActiveSessionSync(updated)
-                updated
-            } else {
-                session
-            }
-        } catch (_: Exception) {
-            session
-        } finally {
-            conn?.disconnect()
-        }
-    }
-
-    private fun pushStateToFirestore(session: ActiveUserSession, state: AppBackupState): Boolean {
-        val refreshed = ensureValidSessionToken(session)
-        val idToken = refreshed.idToken?.takeIf { it.isNotBlank() } ?: return false
-        val projectId = firebaseProjectId
-        val userId = refreshed.userId
-        val now = System.currentTimeMillis()
-
-        var conn: HttpURLConnection? = null
-        return try {
-            val docUrl = "https://firestore.googleapis.com/v1/projects/$projectId/databases/(default)/documents/users/$userId"
-            conn = (URL(docUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "PATCH"
-                connectTimeout = 10_000
-                readTimeout = 10_000
-                doOutput = true
-                setRequestProperty("Authorization", "Bearer $idToken")
-                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            }
-
-            val stateJsonString = adapter.toJson(state)
-            val fieldsObj = JSONObject().apply {
-                put("userId", JSONObject().put("stringValue", userId))
-                put("email", JSONObject().put("stringValue", refreshed.email))
-                put("updatedAtEpochMillis", JSONObject().put("integerValue", now.toString()))
-                put("taskCount", JSONObject().put("integerValue", state.tasks.size.toString()))
-                put("projectCount", JSONObject().put("integerValue", state.projects.size.toString()))
-                put("stateJson", JSONObject().put("stringValue", stateJsonString))
-            }
-            val rootObj = JSONObject().put("fields", fieldsObj)
-
-            conn.outputStream.use { os ->
-                os.write(rootObj.toString().toByteArray(Charsets.UTF_8))
-            }
-
-            val code = conn.responseCode
-            if (code in 200..299) {
-                writeLocalTimestamp(userId, now)
-                true
-            } else {
-                false
-            }
-        } catch (_: Exception) {
-            false
-        } finally {
-            conn?.disconnect()
-        }
-    }
-
-    private fun fetchStateFromFirestore(session: ActiveUserSession): Result<AppBackupState?> {
-        return fetchStateFromFirestoreWithTimestamp(session).map { it?.first }
-    }
-
-    private fun fetchStateFromFirestoreWithTimestamp(
-        session: ActiveUserSession
-    ): Result<Pair<AppBackupState, Long>?> {
-        val refreshed = ensureValidSessionToken(session)
-        val idToken = refreshed.idToken?.takeIf { it.isNotBlank() }
-            ?: return Result.failure(IllegalStateException("NO_TOKEN"))
-        val projectId = firebaseProjectId
-        val userId = refreshed.userId
-
-        var conn: HttpURLConnection? = null
-        return try {
-            val docUrl = "https://firestore.googleapis.com/v1/projects/$projectId/databases/(default)/documents/users/$userId"
-            conn = (URL(docUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 10_000
-                readTimeout = 10_000
-                setRequestProperty("Authorization", "Bearer $idToken")
-            }
-
-            val code = conn.responseCode
-            if (code == 404) {
-                return Result.success(null)
-            }
-            if (code in 200..299) {
-                val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                val json = JSONObject(body)
-                val fields = json.optJSONObject("fields") ?: return Result.success(null)
-                val stateJson = fields.optJSONObject("stateJson")?.optString("stringValue")
-                val updatedAt = fields.optJSONObject("updatedAtEpochMillis")
-                    ?.optString("integerValue")
-                    ?.toLongOrNull() ?: 0L
-
-                if (!stateJson.isNullOrBlank()) {
-                    val parsed = adapter.fromJson(stateJson)
-                    if (parsed != null) {
-                        return Result.success(parsed to updatedAt)
-                    }
-                }
-                Result.success(null)
-            } else {
-                Result.failure(IllegalStateException("FIRESTORE_HTTP_$code"))
-            }
+        val session = getActiveSessionSync() ?: return@withContext Result.success(Unit)
+        try {
+            pushToFirestoreOrThrow(session, state)
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
-        } finally {
-            conn?.disconnect()
-        }
-    }
-
-    private fun writeLocalTimestamp(userId: String, timestamp: Long) {
-        try {
-            val file = userMetaFile(userId)
-            val json = JSONObject().put("updatedAtEpochMillis", timestamp)
-            file.writeText(json.toString(), Charsets.UTF_8)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun readLocalTimestamp(userId: String): Long {
-        return try {
-            val file = userMetaFile(userId)
-            if (file.exists()) {
-                JSONObject(file.readText(Charsets.UTF_8)).optLong("updatedAtEpochMillis", 0L)
-            } else 0L
-        } catch (_: Exception) {
-            0L
         }
     }
 
@@ -710,55 +431,6 @@ class FocusRepository(private val context: Context) {
             tmpFile.renameTo(targetFile)
         } catch (_: Exception) {
         }
-    }
-
-    private fun cacheLocalAccountCredentials(userId: String, email: String, password: String) {
-        try {
-            val normalizedEmail = email.trim().lowercase(Locale.ROOT)
-            val accounts = loadAccountsSync().filterNot {
-                it.email.equals(normalizedEmail, ignoreCase = true)
-            }.toMutableList()
-            accounts.add(
-                LocalAccountRecord(
-                    userId = userId,
-                    email = email.trim(),
-                    passwordHash = sha256(password)
-                )
-            )
-            saveAccountsSync(accounts)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun loadAccountsSync(): List<LocalAccountRecord> {
-        return try {
-            if (accountsFile.exists()) {
-                accountsAdapter.fromJson(accountsFile.readText(Charsets.UTF_8)) ?: emptyList()
-            } else {
-                emptyList()
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    private fun saveAccountsSync(accounts: List<LocalAccountRecord>) {
-        try {
-            accountsFile.writeText(accountsAdapter.toJson(accounts), Charsets.UTF_8)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun saveActiveSessionSync(session: ActiveUserSession) {
-        try {
-            activeSessionFile.writeText(sessionAdapter.toJson(session), Charsets.UTF_8)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun sha256(input: String): String {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8))
-        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     fun exportJson(state: AppBackupState): String {

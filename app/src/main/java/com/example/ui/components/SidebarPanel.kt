@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CreateNewFolder
@@ -181,17 +182,17 @@ fun SidebarPanel(
                             CloudSyncStatus.SYNCED -> Triple(
                                 Icons.Default.CloudDone,
                                 ForestEmerald,
-                                if (isArabic) "متزامن سحابياً (${uiState.firebaseProjectId})" else "Cloud Synced (${uiState.firebaseProjectId})"
+                                "Synced (${uiState.firebaseProjectId})"
                             )
                             CloudSyncStatus.SYNCING -> Triple(
                                 Icons.Default.CloudSync,
                                 MaterialTheme.colorScheme.primary,
-                                if (isArabic) "جارٍ المزامنة السحابية..." else "Syncing to Cloud..."
+                                "Syncing..."
                             )
-                            CloudSyncStatus.OFFLINE_CACHED -> Triple(
-                                Icons.Default.CloudQueue,
-                                SunlightGold,
-                                if (isArabic) "محفوظ محلياً • بانتظار الإنترنت" else "Cached Offline • Auto-syncs"
+                            CloudSyncStatus.SYNC_FAILED -> Triple(
+                                Icons.Default.CloudOff,
+                                Color(0xFFEF4444),
+                                "Sync Failed: ${uiState.cloudSyncErrorMessage ?: "Unknown error"}"
                             )
                             CloudSyncStatus.UNAUTHENTICATED -> Triple(
                                 Icons.Default.CloudQueue,

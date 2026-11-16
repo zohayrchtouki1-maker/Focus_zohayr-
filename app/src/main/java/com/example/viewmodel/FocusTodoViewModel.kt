@@ -8,6 +8,7 @@ import com.example.data.CloudSyncStatus
 import com.example.data.DateUtils
 import com.example.data.FocusRepository
 import com.example.data.SeedData
+import com.google.firebase.firestore.ListenerRegistration
 import com.example.model.AppBackupState
 import com.example.model.AppLanguage
 import com.example.model.AppSettings
@@ -82,6 +83,7 @@ data class MainUiState(
     val currentUserEmail: String? = null,
     val currentUserId: String? = null,
     val cloudSyncStatus: CloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED,
+    val cloudSyncErrorMessage: String? = null,
     val firebaseProjectId: String = "focus-zohayr",
     val isAuthLoading: Boolean = false,
     val authErrorMessage: String? = null,
@@ -100,7 +102,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     private var timerJob: Job? = null
-    private var cloudSyncJob: Job? = null
+    private var firestoreListener: ListenerRegistration? = null
 
     init {
         FocusNotificationManager.ensureChannelsCreated(appContext)
@@ -112,10 +114,10 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             val restoredTimer = restorePersistedTimer(loaded.persistedTimer, defaultFocusSecs)
             val permSnapshot = SystemPermissionsHelper.getSnapshot(appContext)
             val shouldPromptOnLaunch = !permSnapshot.notificationsGranted
-            val initialSyncStatus = when {
-                activeSession == null -> CloudSyncStatus.UNAUTHENTICATED
-                activeSession.pendingCloudPush || activeSession.idToken.isNullOrBlank() -> CloudSyncStatus.OFFLINE_CACHED
-                else -> CloudSyncStatus.SYNCED
+            val initialSyncStatus = if (activeSession != null) {
+                CloudSyncStatus.SYNCING
+            } else {
+                CloudSyncStatus.UNAUTHENTICATED
             }
 
             _uiState.update {
@@ -125,6 +127,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     currentUserEmail = activeSession?.email,
                     currentUserId = activeSession?.userId,
                     cloudSyncStatus = initialSyncStatus,
+                    cloudSyncErrorMessage = null,
                     firebaseProjectId = repository.firebaseProjectId,
                     timer = restoredTimer,
                     systemPermissions = permSnapshot,
@@ -148,7 +151,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             }
 
             if (activeSession != null) {
-                startBackgroundCloudSyncLoop()
+                attachRealtimeFirestoreListener(activeSession.userId)
+                manualCloudSync()
             }
         }
 
@@ -218,31 +222,68 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             val nextData = transform(state.data).copy(
                 persistedTimer = state.timer.toPersisted()
             )
+            val isSignedIn = state.currentUserEmail != null
             viewModelScope.launch {
-                val pushed = repository.saveState(nextData)
+                val res = repository.saveState(nextData)
                 if (_uiState.value.currentUserEmail != null) {
-                    _uiState.update {
-                        it.copy(
-                            cloudSyncStatus = if (pushed) CloudSyncStatus.SYNCED else CloudSyncStatus.OFFLINE_CACHED
-                        )
+                    if (res.isSuccess) {
+                        _uiState.update {
+                            it.copy(
+                                cloudSyncStatus = CloudSyncStatus.SYNCED,
+                                cloudSyncErrorMessage = null
+                            )
+                        }
+                    } else {
+                        val err = res.exceptionOrNull()?.localizedMessage
+                            ?: res.exceptionOrNull()?.message
+                            ?: "Cloud Firestore write failed"
+                        _uiState.update {
+                            it.copy(
+                                cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
+                                cloudSyncErrorMessage = err
+                            )
+                        }
                     }
                 }
             }
-            state.copy(data = nextData)
+            state.copy(
+                data = nextData,
+                cloudSyncStatus = if (isSignedIn) CloudSyncStatus.SYNCING else state.cloudSyncStatus,
+                cloudSyncErrorMessage = if (isSignedIn) null else state.cloudSyncErrorMessage
+            )
         }
     }
 
     private fun saveCurrentTimerToStorage() {
         val state = _uiState.value
         val nextData = state.data.copy(persistedTimer = state.timer.toPersisted())
-        _uiState.update { it.copy(data = nextData) }
+        val isSignedIn = state.currentUserEmail != null
+        _uiState.update {
+            it.copy(
+                data = nextData,
+                cloudSyncStatus = if (isSignedIn) CloudSyncStatus.SYNCING else it.cloudSyncStatus
+            )
+        }
         viewModelScope.launch {
-            val pushed = repository.saveState(nextData)
+            val res = repository.saveState(nextData)
             if (_uiState.value.currentUserEmail != null) {
-                _uiState.update {
-                    it.copy(
-                        cloudSyncStatus = if (pushed) CloudSyncStatus.SYNCED else CloudSyncStatus.OFFLINE_CACHED
-                    )
+                if (res.isSuccess) {
+                    _uiState.update {
+                        it.copy(
+                            cloudSyncStatus = CloudSyncStatus.SYNCED,
+                            cloudSyncErrorMessage = null
+                        )
+                    }
+                } else {
+                    val err = res.exceptionOrNull()?.localizedMessage
+                        ?: res.exceptionOrNull()?.message
+                        ?: "Cloud Firestore write failed"
+                    _uiState.update {
+                        it.copy(
+                            cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
+                            cloudSyncErrorMessage = err
+                        )
+                    }
                 }
             }
         }
@@ -316,47 +357,43 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun signUp(email: String, password: String) {
-        val isArabic = _uiState.value.data.settings.language == AppLanguage.AR
         _uiState.update {
             it.copy(
                 isAuthLoading = true,
                 authErrorMessage = null,
-                cloudSyncStatus = CloudSyncStatus.SYNCING
+                cloudSyncStatus = CloudSyncStatus.SYNCING,
+                cloudSyncErrorMessage = null
             )
         }
         viewModelScope.launch {
             val result = repository.signUp(email, password)
             if (result.isSuccess) {
-                val session = result.getOrThrow()
-                val userState = repository.loadState()
-                val secs = userState.settings.pomodoroMinutes * 60
-                val restoredTimer = restorePersistedTimer(userState.persistedTimer, secs)
-                val status = if (session.pendingCloudPush || session.idToken.isNullOrBlank()) {
-                    CloudSyncStatus.OFFLINE_CACHED
-                } else {
-                    CloudSyncStatus.SYNCED
-                }
+                val (session, syncedState) = result.getOrThrow()
+                val secs = syncedState.settings.pomodoroMinutes * 60
+                val restoredTimer = restorePersistedTimer(syncedState.persistedTimer, secs)
                 _uiState.update {
                     it.copy(
                         isAuthLoading = false,
                         showAuthScreen = false,
                         currentUserEmail = session.email,
                         currentUserId = session.userId,
-                        cloudSyncStatus = status,
-                        data = userState,
+                        cloudSyncStatus = CloudSyncStatus.SYNCED,
+                        cloudSyncErrorMessage = null,
+                        data = syncedState,
                         timer = restoredTimer
                     )
                 }
-                FocusNotificationManager.syncAllTaskReminders(appContext, userState.tasks, userState.settings)
-                startBackgroundCloudSyncLoop()
+                FocusNotificationManager.syncAllTaskReminders(appContext, syncedState.tasks, syncedState.settings)
+                attachRealtimeFirestoreListener(session.userId)
             } else {
-                val code = result.exceptionOrNull()?.message ?: "AUTH_FAILED"
-                val localizedError = localizeAuthError(code, isArabic)
+                val ex = result.exceptionOrNull()
+                val exactError = ex?.localizedMessage ?: ex?.message ?: "Sign-up failed"
                 _uiState.update {
                     it.copy(
                         isAuthLoading = false,
-                        authErrorMessage = localizedError,
-                        cloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED
+                        authErrorMessage = exactError,
+                        cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
+                        cloudSyncErrorMessage = exactError
                     )
                 }
             }
@@ -364,47 +401,43 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun signIn(email: String, password: String) {
-        val isArabic = _uiState.value.data.settings.language == AppLanguage.AR
         _uiState.update {
             it.copy(
                 isAuthLoading = true,
                 authErrorMessage = null,
-                cloudSyncStatus = CloudSyncStatus.SYNCING
+                cloudSyncStatus = CloudSyncStatus.SYNCING,
+                cloudSyncErrorMessage = null
             )
         }
         viewModelScope.launch {
             val result = repository.signIn(email, password)
             if (result.isSuccess) {
-                val session = result.getOrThrow()
-                val userState = repository.loadState()
-                val secs = userState.settings.pomodoroMinutes * 60
-                val restoredTimer = restorePersistedTimer(userState.persistedTimer, secs)
-                val status = if (session.pendingCloudPush || session.idToken.isNullOrBlank()) {
-                    CloudSyncStatus.OFFLINE_CACHED
-                } else {
-                    CloudSyncStatus.SYNCED
-                }
+                val (session, syncedState) = result.getOrThrow()
+                val secs = syncedState.settings.pomodoroMinutes * 60
+                val restoredTimer = restorePersistedTimer(syncedState.persistedTimer, secs)
                 _uiState.update {
                     it.copy(
                         isAuthLoading = false,
                         showAuthScreen = false,
                         currentUserEmail = session.email,
                         currentUserId = session.userId,
-                        cloudSyncStatus = status,
-                        data = userState,
+                        cloudSyncStatus = CloudSyncStatus.SYNCED,
+                        cloudSyncErrorMessage = null,
+                        data = syncedState,
                         timer = restoredTimer
                     )
                 }
-                FocusNotificationManager.syncAllTaskReminders(appContext, userState.tasks, userState.settings)
-                startBackgroundCloudSyncLoop()
+                FocusNotificationManager.syncAllTaskReminders(appContext, syncedState.tasks, syncedState.settings)
+                attachRealtimeFirestoreListener(session.userId)
             } else {
-                val code = result.exceptionOrNull()?.message ?: "AUTH_FAILED"
-                val localizedError = localizeAuthError(code, isArabic)
+                val ex = result.exceptionOrNull()
+                val exactError = ex?.localizedMessage ?: ex?.message ?: "Sign-in failed"
                 _uiState.update {
                     it.copy(
                         isAuthLoading = false,
-                        authErrorMessage = localizedError,
-                        cloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED
+                        authErrorMessage = exactError,
+                        cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
+                        cloudSyncErrorMessage = exactError
                     )
                 }
             }
@@ -412,7 +445,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun signOut() {
-        cloudSyncJob?.cancel()
+        firestoreListener?.remove()
+        firestoreListener = null
         timerJob?.cancel()
         FocusNotificationManager.cancelOngoingTimerNotification(appContext)
         FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
@@ -425,6 +459,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     currentUserEmail = null,
                     currentUserId = null,
                     cloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED,
+                    cloudSyncErrorMessage = null,
                     showAuthScreen = false,
                     selectedTaskId = null,
                     data = anonymousState,
@@ -440,62 +475,76 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun manualCloudSync() {
-        if (_uiState.value.currentUserEmail == null) return
+        if (_uiState.value.currentUserEmail == null) {
+            setShowAuthScreen(true)
+            return
+        }
         viewModelScope.launch {
-            _uiState.update { it.copy(cloudSyncStatus = CloudSyncStatus.SYNCING) }
-            val (remoteUpdatedState, newStatus) = repository.syncWithCloudIfSignedIn(_uiState.value.data)
-            _uiState.update { state ->
-                if (remoteUpdatedState != null) {
-                    FocusNotificationManager.syncAllTaskReminders(
-                        appContext,
-                        remoteUpdatedState.tasks,
-                        remoteUpdatedState.settings
+            _uiState.update {
+                it.copy(
+                    cloudSyncStatus = CloudSyncStatus.SYNCING,
+                    cloudSyncErrorMessage = null
+                )
+            }
+            val result = repository.forceCloudSyncNow(_uiState.value.data)
+            if (result.isSuccess) {
+                val syncedState = result.getOrThrow()
+                FocusNotificationManager.syncAllTaskReminders(
+                    appContext,
+                    syncedState.tasks,
+                    syncedState.settings
+                )
+                _uiState.update {
+                    it.copy(
+                        data = syncedState,
+                        cloudSyncStatus = CloudSyncStatus.SYNCED,
+                        cloudSyncErrorMessage = null
                     )
-                    state.copy(
-                        data = remoteUpdatedState,
-                        cloudSyncStatus = newStatus
+                }
+            } else {
+                val ex = result.exceptionOrNull()
+                val exactErr = ex?.localizedMessage ?: ex?.message ?: "Cloud Firestore sync failed"
+                _uiState.update {
+                    it.copy(
+                        cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
+                        cloudSyncErrorMessage = exactErr
                     )
-                } else {
-                    state.copy(cloudSyncStatus = newStatus)
                 }
             }
         }
     }
 
-    private fun startBackgroundCloudSyncLoop() {
-        cloudSyncJob?.cancel()
-        cloudSyncJob = viewModelScope.launch {
-            while (isActive && _uiState.value.currentUserEmail != null) {
-                delay(15_000L)
-                if (_uiState.value.currentUserEmail == null) break
-                val (remoteUpdatedState, newStatus) = repository.syncWithCloudIfSignedIn(_uiState.value.data)
-                _uiState.update { state ->
-                    if (remoteUpdatedState != null) {
-                        FocusNotificationManager.syncAllTaskReminders(
-                            appContext,
-                            remoteUpdatedState.tasks,
-                            remoteUpdatedState.settings
-                        )
-                        state.copy(
-                            data = remoteUpdatedState,
-                            cloudSyncStatus = newStatus
-                        )
-                    } else {
-                        state.copy(cloudSyncStatus = newStatus)
-                    }
-                }
-            }
-        }
+    fun clearCloudSyncError() {
+        _uiState.update { it.copy(cloudSyncErrorMessage = null) }
     }
 
-    private fun localizeAuthError(code: String, isArabic: Boolean): String = when (code) {
-        "INVALID_EMAIL" -> if (isArabic) "يرجى إدخال بريد إلكتروني صحيح." else "Please enter a valid email address."
-        "WEAK_PASSWORD" -> if (isArabic) "كلمة المرور يجب أن تتكون من 6 أحرف على الأقل." else "Password must be at least 6 characters."
-        "EMPTY_PASSWORD" -> if (isArabic) "يرجى إدخال كلمة المرور." else "Please enter your password."
-        "EMAIL_EXISTS" -> if (isArabic) "هذا البريد الإلكتروني مسجل بالفعل. قم بتسجيل الدخول." else "This email is already registered. Please sign in."
-        "ACCOUNT_NOT_FOUND" -> if (isArabic) "لم يتم العثور على حساب بهذا البريد. أنشئ حساباً جديداً." else "No account found with this email. Please create an account."
-        "WRONG_PASSWORD" -> if (isArabic) "البريد الإلكتروني أو كلمة المرور غير صحيحة." else "Invalid email or password."
-        else -> if (isArabic) "تعذر الاتصال بالخادم ($code)." else "Authentication failed ($code)."
+    private fun attachRealtimeFirestoreListener(userId: String) {
+        firestoreListener?.remove()
+        firestoreListener = repository.listenToUserCloudState(
+            userId = userId,
+            onRemoteStateChanged = { remoteState ->
+                FocusNotificationManager.syncAllTaskReminders(
+                    appContext,
+                    remoteState.tasks,
+                    remoteState.settings
+                )
+                _uiState.update {
+                    it.copy(
+                        data = remoteState,
+                        cloudSyncStatus = CloudSyncStatus.SYNCED,
+                        cloudSyncErrorMessage = null
+                    )
+                }
+            },
+            onError = { exactError ->
+                _uiState.update {
+                    it.copy(
+                        cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
+                        cloudSyncErrorMessage = exactError
+                    )
+                }
+            }
+        )
     }
 
     fun clearStatusBanner() {
@@ -1444,7 +1493,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         timerJob?.cancel()
-        cloudSyncJob?.cancel()
+        firestoreListener?.remove()
         soundSynthesizer.release()
     }
 }

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Email
@@ -64,13 +65,13 @@ import com.example.data.CloudSyncStatus
 import com.example.model.AppLanguage
 import com.example.ui.theme.ForestEmerald
 import com.example.ui.theme.JetBrainsMonoFontFamily
-import com.example.ui.theme.SunlightGold
 
 @Composable
 fun AccountAuthDialog(
     currentUserEmail: String?,
     currentUserId: String?,
     cloudSyncStatus: CloudSyncStatus,
+    cloudSyncErrorMessage: String?,
     isAuthLoading: Boolean,
     authErrorMessage: String?,
     firebaseProjectId: String,
@@ -100,20 +101,17 @@ fun AccountAuthDialog(
         CloudSyncStatus.SYNCED -> Triple(
             Icons.Default.CloudDone,
             ForestEmerald,
-            if (isArabic) "متصل بـ Cloud Firestore ($firebaseProjectId) • المزامنة الفورية نشطة"
-            else "Synced with Cloud Firestore ($firebaseProjectId) • Real-time & Offline Active"
+            "Synced • Cloud Firestore ($firebaseProjectId)"
         )
         CloudSyncStatus.SYNCING -> Triple(
             Icons.Default.CloudSync,
             primaryRoyalBlue,
-            if (isArabic) "جارٍ المزامنة السحابية مع $firebaseProjectId..."
-            else "Syncing with Cloud Firestore ($firebaseProjectId)..."
+            "Syncing... • Cloud Firestore ($firebaseProjectId)"
         )
-        CloudSyncStatus.OFFLINE_CACHED -> Triple(
-            Icons.Default.CloudQueue,
-            SunlightGold,
-            if (isArabic) "التخزين المحلي نشط • ستتم المزامنة السحابية تلقائياً عند توفر الاتصال"
-            else "Offline Cache Active • Auto-syncs to Cloud Firestore when online"
+        CloudSyncStatus.SYNC_FAILED -> Triple(
+            Icons.Default.CloudOff,
+            Color(0xFFEF4444),
+            "Sync Failed: ${cloudSyncErrorMessage ?: "Unknown error"}"
         )
         CloudSyncStatus.UNAUTHENTICATED -> Triple(
             Icons.Default.CloudQueue,
@@ -186,7 +184,7 @@ fun AccountAuthDialog(
                             )
                             Text(
                                 text = if (isArabic) {
-                                    "مزامنة سحابية عبر Firebase Firestore ($firebaseProjectId)"
+                                    "مزامنة سحابية فورية عبر Firebase Firestore ($firebaseProjectId)"
                                 } else {
                                     "Real-time cloud sync via Firebase Firestore ($firebaseProjectId)"
                                 },
@@ -208,21 +206,30 @@ fun AccountAuthDialog(
 
                     // Cloud Sync Status Badge
                     Surface(
-                        shape = CircleShape,
+                        shape = RoundedCornerShape(14.dp),
                         color = badgeTint.copy(alpha = 0.14f),
-                        border = BorderStroke(1.dp, badgeTint.copy(alpha = 0.4f))
+                        border = BorderStroke(1.dp, badgeTint.copy(alpha = 0.45f)),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                         ) {
-                            Icon(
-                                imageVector = badgeIcon,
-                                contentDescription = null,
-                                tint = badgeTint,
-                                modifier = Modifier.size(15.dp)
-                            )
+                            if (cloudSyncStatus == CloudSyncStatus.SYNCING) {
+                                CircularProgressIndicator(
+                                    color = badgeTint,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = badgeIcon,
+                                    contentDescription = null,
+                                    tint = badgeTint,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                             Text(
                                 text = badgeText,
                                 style = MaterialTheme.typography.labelSmall,
@@ -262,15 +269,26 @@ fun AccountAuthDialog(
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                     }
-                                    IconButton(
+                                    Button(
                                         onClick = onManualSync,
-                                        enabled = !isAuthLoading,
+                                        enabled = cloudSyncStatus != CloudSyncStatus.SYNCING,
+                                        shape = CircleShape,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = primaryRoyalBlue,
+                                            contentColor = Color.White
+                                        ),
                                         modifier = Modifier.testTag("manual_cloud_sync_button")
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Sync,
-                                            contentDescription = if (isArabic) "مزامنة الآن" else "Sync Now",
-                                            tint = primaryRoyalBlue
+                                            contentDescription = "Sync Now",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Sync Now",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     }
                                 }
@@ -430,14 +448,14 @@ fun AccountAuthDialog(
                         if (!authErrorMessage.isNullOrBlank()) {
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                                color = Color(0xFFEF4444).copy(alpha = 0.14f),
+                                border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.5f)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
                                     text = authErrorMessage,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
+                                    color = Color(0xFFEF4444),
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                                 )

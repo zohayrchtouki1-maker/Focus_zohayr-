@@ -35,6 +35,9 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircleOutline
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
@@ -46,9 +49,11 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Park
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
@@ -81,6 +86,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.CloudSyncStatus
 import com.example.data.DateUtils
 import com.example.i18n.Strings
 import com.example.i18n.formatDuration
@@ -129,6 +135,7 @@ fun MainTaskWorkspace(
     onInspectTask: (String) -> Unit,
     onStartFocusForTask: (String) -> Unit,
     onOpenAuth: () -> Unit = {},
+    onManualSync: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isArabic = uiState.data.settings.language == AppLanguage.AR
@@ -266,17 +273,6 @@ fun MainTaskWorkspace(
                 }
             }
 
-            IconButton(
-                onClick = onOpenAuth,
-                modifier = Modifier.testTag("open_auth_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.AccountCircle,
-                    contentDescription = if (isArabic) "حسابي والمزامنة" else "Account & Cloud Sync",
-                    tint = if (uiState.currentUserEmail != null) ForestEmerald else topBarContrastColor
-                )
-            }
-
             // Language Toggle Chip ("EN" / "AR")
             Surface(
                 shape = RoundedCornerShape(8.dp),
@@ -335,6 +331,193 @@ fun MainTaskWorkspace(
                             }
                         )
                     }
+                }
+            }
+        }
+
+        // Top Bar Cloud Sync Status Bar + Manual "Sync Now" Button + Account Button
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val statusColor = when (uiState.cloudSyncStatus) {
+                CloudSyncStatus.SYNCED -> ForestEmerald
+                CloudSyncStatus.SYNCING -> MaterialTheme.colorScheme.primary
+                CloudSyncStatus.SYNC_FAILED -> Color(0xFFEF4444)
+                CloudSyncStatus.UNAUTHENTICATED -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            val statusText = when (uiState.cloudSyncStatus) {
+                CloudSyncStatus.SYNCED -> "Synced"
+                CloudSyncStatus.SYNCING -> "Syncing..."
+                CloudSyncStatus.SYNC_FAILED -> "Sync Failed"
+                CloudSyncStatus.UNAUTHENTICATED -> if (isArabic) "سجل الدخول للمزامنة (Sign In)" else "Sign In to Sync"
+            }
+
+            // Cloud Sync Status Indicator Pill
+            Surface(
+                shape = CircleShape,
+                color = statusColor.copy(alpha = 0.14f),
+                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.55f)),
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable(onClick = onOpenAuth)
+                    .testTag("top_bar_cloud_sync_status")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    when (uiState.cloudSyncStatus) {
+                        CloudSyncStatus.SYNCED -> {
+                            Icon(
+                                imageVector = Icons.Default.CloudDone,
+                                contentDescription = "Synced",
+                                tint = ForestEmerald,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        CloudSyncStatus.SYNCING -> {
+                            CircularProgressIndicator(
+                                color = statusColor,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                        CloudSyncStatus.SYNC_FAILED -> {
+                            Icon(
+                                imageVector = Icons.Default.CloudOff,
+                                contentDescription = "Sync Failed",
+                                tint = Color(0xFFEF4444),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        CloudSyncStatus.UNAUTHENTICATED -> {
+                            Icon(
+                                imageVector = Icons.Default.CloudQueue,
+                                contentDescription = "Unauthenticated",
+                                tint = statusColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = statusColor
+                    )
+                    if (uiState.currentUserEmail != null) {
+                        Text(
+                            text = "• ${uiState.currentUserEmail}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            // Manual "Sync Now" Button
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable(onClick = onManualSync)
+                    .testTag("top_bar_sync_now_button")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Sync,
+                        contentDescription = "Sync Now",
+                        tint = Color.White,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = if (isArabic) "مزامنة الآن (Sync Now)" else "Sync Now",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+
+            // Account Profile Button
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .clickable(onClick = onOpenAuth)
+                    .testTag("open_auth_button")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AccountCircle,
+                        contentDescription = "Account",
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = if (isArabic) "حسابي" else "Account",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+        }
+
+        // Exact Error Message Banner when Cloud Sync Fails
+        if (uiState.cloudSyncStatus == CloudSyncStatus.SYNC_FAILED && !uiState.cloudSyncErrorMessage.isNullOrBlank()) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFFEF4444).copy(alpha = 0.14f),
+                border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.6f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 8.dp)
+                    .testTag("top_bar_sync_error_banner")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CloudOff,
+                        contentDescription = "Sync Failed",
+                        tint = Color(0xFFEF4444),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Sync Failed: ${uiState.cloudSyncErrorMessage}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFEF4444),
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }

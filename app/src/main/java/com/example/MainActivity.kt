@@ -185,7 +185,8 @@ fun FocusTodoAppRoot(
                                     onToggleTaskCompleted = { viewModel.toggleTaskCompleted(it) },
                                     onInspectTask = { viewModel.openTaskInspector(it) },
                                     onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) },
-                                    onOpenAuth = { viewModel.setShowAuthScreen(true) }
+                                    onOpenAuth = { viewModel.setShowAuthScreen(true) },
+                                    onManualSync = { viewModel.manualCloudSync() }
                                 )
 
                                 FloatingMiniTimerBar(
@@ -287,7 +288,8 @@ fun FocusTodoAppRoot(
                                     onToggleTaskCompleted = { viewModel.toggleTaskCompleted(it) },
                                     onInspectTask = { viewModel.openTaskInspector(it) },
                                     onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) },
-                                    onOpenAuth = { viewModel.setShowAuthScreen(true) }
+                                    onOpenAuth = { viewModel.setShowAuthScreen(true) },
+                                    onManualSync = { viewModel.manualCloudSync() }
                                 )
 
                                 FloatingMiniTimerBar(
@@ -434,6 +436,7 @@ fun FocusTodoAppRoot(
                         currentUserEmail = uiState.currentUserEmail,
                         currentUserId = uiState.currentUserId,
                         cloudSyncStatus = uiState.cloudSyncStatus,
+                        cloudSyncErrorMessage = uiState.cloudSyncErrorMessage,
                         isAuthLoading = uiState.isAuthLoading,
                         authErrorMessage = uiState.authErrorMessage,
                         firebaseProjectId = uiState.firebaseProjectId,

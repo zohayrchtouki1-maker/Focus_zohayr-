@@ -128,37 +128,26 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `account sign up migrates local data to users userId and persists across sign out and sign in`() {
+    fun `firebase repository configures focus-zohayr project and persists state`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repo = FocusRepository(context)
         kotlinx.coroutines.runBlocking {
-            repo.signOut()
-            val localBeforeAuth = SeedData.createInitialState().copy(
+            assertEquals("focus-zohayr", repo.firebaseProjectId)
+            val stateWithTask = SeedData.createInitialState().copy(
                 tasks = listOf(
                     TaskItem(
-                        id = "migrated_task_1",
-                        title = "مهمة محلية قبل تسجيل الدخول",
+                        id = "cloud_ready_task_1",
+                        title = "مهمة جاهزة للمزامنة السحابية",
                         dueDateEpochDay = DateUtils.todayEpochDay()
                     )
                 )
             )
-            repo.saveState(localBeforeAuth)
+            val saveRes = repo.saveState(stateWithTask)
+            assertTrue(saveRes.isSuccess)
 
-            val signUpRes = repo.signUp("zohayr@example.com", "secret123")
-            assertTrue(signUpRes.isSuccess)
-            val session = signUpRes.getOrThrow()
-            assertEquals("zohayr@example.com", session.email)
-
-            val loadedUserState = repo.loadState()
-            assertEquals(1, loadedUserState.tasks.size)
-            assertEquals("migrated_task_1", loadedUserState.tasks.first().id)
-
-            repo.signOut()
-            val signInRes = repo.signIn("zohayr@example.com", "secret123")
-            assertTrue(signInRes.isSuccess)
-            val reloadedAfterSignIn = repo.loadState()
-            assertEquals(1, reloadedAfterSignIn.tasks.size)
-            assertEquals("migrated_task_1", reloadedAfterSignIn.tasks.first().id)
+            val loadedState = repo.loadState()
+            assertEquals(1, loadedState.tasks.size)
+            assertEquals("cloud_ready_task_1", loadedState.tasks.first().id)
         }
     }
 }
