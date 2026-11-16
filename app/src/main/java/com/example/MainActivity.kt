@@ -67,7 +67,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        FirebaseInitializer.ensureInitialized(this)
+        ensureFirebaseInitialized(this)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {

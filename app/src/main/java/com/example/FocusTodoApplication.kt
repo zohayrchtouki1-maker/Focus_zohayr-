@@ -5,6 +5,6 @@ import android.app.Application
 class FocusTodoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        FirebaseInitializer.ensureInitialized(this)
+        ensureFirebaseInitialized(this)
     }
 }

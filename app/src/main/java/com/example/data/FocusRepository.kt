@@ -1,7 +1,7 @@
 package com.example.data
 
 import android.content.Context
-import com.example.FirebaseInitializer
+import com.example.ensureFirebaseInitialized
 import com.example.model.AppBackupState
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.EmailAuthProvider
@@ -65,12 +65,12 @@ class FocusRepository(private val context: Context) {
     }
 
     private fun getFirebaseAuth(): FirebaseAuth {
-        val app = FirebaseInitializer.ensureInitialized(context)
+        val app = ensureFirebaseInitialized(context)
         return FirebaseAuth.getInstance(app)
     }
 
     private fun getFirestore(): FirebaseFirestore {
-        val app = FirebaseInitializer.ensureInitialized(context)
+        val app = ensureFirebaseInitialized(context)
         val db = FirebaseFirestore.getInstance(app)
         if (!firestoreCacheConfigured) {
             synchronized(this) {
@@ -92,7 +92,7 @@ class FocusRepository(private val context: Context) {
 
     val firebaseProjectId: String
         get() = try {
-            val app = FirebaseInitializer.ensureInitialized(context)
+            val app = ensureFirebaseInitialized(context)
             app.options.projectId ?: "focus-zohayr"
         } catch (_: Exception) {
             "focus-zohayr"
