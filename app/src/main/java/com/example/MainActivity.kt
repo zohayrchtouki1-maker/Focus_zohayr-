@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.i18n.AppStrings
 import com.example.model.AppLanguage
+import com.example.ui.components.AccountAuthDialog
 import com.example.ui.components.BackgroundTimerPermissionsDialog
 import com.example.ui.components.FloatingMiniTimerBar
 import com.example.ui.components.ForestDialog
@@ -149,6 +150,7 @@ fun FocusTodoAppRoot(
                                 onOpenReports = { viewModel.setShowReports(true) },
                                 onOpenForest = { viewModel.setShowForest(true) },
                                 onOpenSettings = { viewModel.setShowSettings(true) },
+                                onOpenAuth = { viewModel.setShowAuthScreen(true) },
                                 onAddFolder = { viewModel.addFolder(it) },
                                 onRenameFolder = { id, name -> viewModel.renameFolder(id, name) },
                                 onDeleteFolder = { viewModel.deleteFolder(it) },
@@ -182,7 +184,8 @@ fun FocusTodoAppRoot(
                                     },
                                     onToggleTaskCompleted = { viewModel.toggleTaskCompleted(it) },
                                     onInspectTask = { viewModel.openTaskInspector(it) },
-                                    onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) }
+                                    onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) },
+                                    onOpenAuth = { viewModel.setShowAuthScreen(true) }
                                 )
 
                                 FloatingMiniTimerBar(
@@ -242,6 +245,10 @@ fun FocusTodoAppRoot(
                                         scope.launch { drawerState.close() }
                                         viewModel.setShowSettings(true)
                                     },
+                                    onOpenAuth = {
+                                        scope.launch { drawerState.close() }
+                                        viewModel.setShowAuthScreen(true)
+                                    },
                                     onAddFolder = { viewModel.addFolder(it) },
                                     onRenameFolder = { id, name -> viewModel.renameFolder(id, name) },
                                     onDeleteFolder = { viewModel.deleteFolder(it) },
@@ -279,7 +286,8 @@ fun FocusTodoAppRoot(
                                     },
                                     onToggleTaskCompleted = { viewModel.toggleTaskCompleted(it) },
                                     onInspectTask = { viewModel.openTaskInspector(it) },
-                                    onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) }
+                                    onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) },
+                                    onOpenAuth = { viewModel.setShowAuthScreen(true) }
                                 )
 
                                 FloatingMiniTimerBar(
@@ -413,6 +421,29 @@ fun FocusTodoAppRoot(
                         onToggleLockedInRecents = { confirmed ->
                             viewModel.updateSettings { it.copy(lockedInRecentsConfirmed = confirmed) }
                         }
+                    )
+                }
+
+                // Account Sign In / Create Account / Cloud Sync Screen
+                AnimatedVisibility(
+                    visible = uiState.showAuthScreen,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it / 6 }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 6 })
+                ) {
+                    AccountAuthDialog(
+                        currentUserEmail = uiState.currentUserEmail,
+                        currentUserId = uiState.currentUserId,
+                        cloudSyncStatus = uiState.cloudSyncStatus,
+                        isAuthLoading = uiState.isAuthLoading,
+                        authErrorMessage = uiState.authErrorMessage,
+                        firebaseProjectId = uiState.firebaseProjectId,
+                        language = settings.language,
+                        onDismiss = { viewModel.setShowAuthScreen(false) },
+                        onSignIn = { email, password -> viewModel.signIn(email, password) },
+                        onSignUp = { email, password -> viewModel.signUp(email, password) },
+                        onSignOut = { viewModel.signOut() },
+                        onManualSync = { viewModel.manualCloudSync() },
+                        onClearError = { viewModel.clearAuthError() }
                     )
                 }
             }

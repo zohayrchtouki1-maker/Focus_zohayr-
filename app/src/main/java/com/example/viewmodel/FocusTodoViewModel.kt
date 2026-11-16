@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.audio.SoundSynthesizer
+import com.example.data.CloudSyncStatus
 import com.example.data.DateUtils
 import com.example.data.FocusRepository
 import com.example.data.SeedData
@@ -77,6 +78,13 @@ data class MainUiState(
     val showForest: Boolean = false,
     val showSettings: Boolean = false,
     val showBackgroundPermissionsModal: Boolean = false,
+    val showAuthScreen: Boolean = false,
+    val currentUserEmail: String? = null,
+    val currentUserId: String? = null,
+    val cloudSyncStatus: CloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED,
+    val firebaseProjectId: String = "focus-zohayr",
+    val isAuthLoading: Boolean = false,
+    val authErrorMessage: String? = null,
     val timer: TimerUiState = TimerUiState(),
     val systemPermissions: SystemPermissionSnapshot = SystemPermissionSnapshot(),
     val permissionRequestTrigger: Int = 0,
@@ -92,21 +100,32 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     private var timerJob: Job? = null
+    private var cloudSyncJob: Job? = null
 
     init {
         FocusNotificationManager.ensureChannelsCreated(appContext)
 
         viewModelScope.launch {
+            val activeSession = repository.getActiveSessionSync()
             val loaded = repository.loadState()
             val defaultFocusSecs = loaded.settings.pomodoroMinutes * 60
             val restoredTimer = restorePersistedTimer(loaded.persistedTimer, defaultFocusSecs)
             val permSnapshot = SystemPermissionsHelper.getSnapshot(appContext)
             val shouldPromptOnLaunch = !permSnapshot.notificationsGranted
+            val initialSyncStatus = when {
+                activeSession == null -> CloudSyncStatus.UNAUTHENTICATED
+                activeSession.pendingCloudPush || activeSession.idToken.isNullOrBlank() -> CloudSyncStatus.OFFLINE_CACHED
+                else -> CloudSyncStatus.SYNCED
+            }
 
             _uiState.update {
                 it.copy(
                     isLoaded = true,
                     data = loaded,
+                    currentUserEmail = activeSession?.email,
+                    currentUserId = activeSession?.userId,
+                    cloudSyncStatus = initialSyncStatus,
+                    firebaseProjectId = repository.firebaseProjectId,
                     timer = restoredTimer,
                     systemPermissions = permSnapshot,
                     permissionRequestTrigger = if (shouldPromptOnLaunch) it.permissionRequestTrigger + 1 else it.permissionRequestTrigger
@@ -126,6 +145,10 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 if (_uiState.value.timer.isRunning) {
                     startTimerTicker()
                 }
+            }
+
+            if (activeSession != null) {
+                startBackgroundCloudSyncLoop()
             }
         }
 
@@ -196,7 +219,14 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 persistedTimer = state.timer.toPersisted()
             )
             viewModelScope.launch {
-                repository.saveState(nextData)
+                val pushed = repository.saveState(nextData)
+                if (_uiState.value.currentUserEmail != null) {
+                    _uiState.update {
+                        it.copy(
+                            cloudSyncStatus = if (pushed) CloudSyncStatus.SYNCED else CloudSyncStatus.OFFLINE_CACHED
+                        )
+                    }
+                }
             }
             state.copy(data = nextData)
         }
@@ -207,7 +237,14 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         val nextData = state.data.copy(persistedTimer = state.timer.toPersisted())
         _uiState.update { it.copy(data = nextData) }
         viewModelScope.launch {
-            repository.saveState(nextData)
+            val pushed = repository.saveState(nextData)
+            if (_uiState.value.currentUserEmail != null) {
+                _uiState.update {
+                    it.copy(
+                        cloudSyncStatus = if (pushed) CloudSyncStatus.SYNCED else CloudSyncStatus.OFFLINE_CACHED
+                    )
+                }
+            }
         }
     }
 
@@ -227,6 +264,9 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun onAppResumed() {
         refreshSystemPermissions()
         reconcileRunningTimerWithTimestamp()
+        if (_uiState.value.currentUserEmail != null) {
+            manualCloudSync()
+        }
     }
 
     fun selectDestination(dest: NavDestination) {
@@ -265,6 +305,197 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun setShowBackgroundPermissionsModal(show: Boolean) {
         if (show) refreshSystemPermissions()
         _uiState.update { it.copy(showBackgroundPermissionsModal = show) }
+    }
+
+    fun setShowAuthScreen(show: Boolean) {
+        _uiState.update { it.copy(showAuthScreen = show, authErrorMessage = null) }
+    }
+
+    fun clearAuthError() {
+        _uiState.update { it.copy(authErrorMessage = null) }
+    }
+
+    fun signUp(email: String, password: String) {
+        val isArabic = _uiState.value.data.settings.language == AppLanguage.AR
+        _uiState.update {
+            it.copy(
+                isAuthLoading = true,
+                authErrorMessage = null,
+                cloudSyncStatus = CloudSyncStatus.SYNCING
+            )
+        }
+        viewModelScope.launch {
+            val result = repository.signUp(email, password)
+            if (result.isSuccess) {
+                val session = result.getOrThrow()
+                val userState = repository.loadState()
+                val secs = userState.settings.pomodoroMinutes * 60
+                val restoredTimer = restorePersistedTimer(userState.persistedTimer, secs)
+                val status = if (session.pendingCloudPush || session.idToken.isNullOrBlank()) {
+                    CloudSyncStatus.OFFLINE_CACHED
+                } else {
+                    CloudSyncStatus.SYNCED
+                }
+                _uiState.update {
+                    it.copy(
+                        isAuthLoading = false,
+                        showAuthScreen = false,
+                        currentUserEmail = session.email,
+                        currentUserId = session.userId,
+                        cloudSyncStatus = status,
+                        data = userState,
+                        timer = restoredTimer
+                    )
+                }
+                FocusNotificationManager.syncAllTaskReminders(appContext, userState.tasks, userState.settings)
+                startBackgroundCloudSyncLoop()
+            } else {
+                val code = result.exceptionOrNull()?.message ?: "AUTH_FAILED"
+                val localizedError = localizeAuthError(code, isArabic)
+                _uiState.update {
+                    it.copy(
+                        isAuthLoading = false,
+                        authErrorMessage = localizedError,
+                        cloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED
+                    )
+                }
+            }
+        }
+    }
+
+    fun signIn(email: String, password: String) {
+        val isArabic = _uiState.value.data.settings.language == AppLanguage.AR
+        _uiState.update {
+            it.copy(
+                isAuthLoading = true,
+                authErrorMessage = null,
+                cloudSyncStatus = CloudSyncStatus.SYNCING
+            )
+        }
+        viewModelScope.launch {
+            val result = repository.signIn(email, password)
+            if (result.isSuccess) {
+                val session = result.getOrThrow()
+                val userState = repository.loadState()
+                val secs = userState.settings.pomodoroMinutes * 60
+                val restoredTimer = restorePersistedTimer(userState.persistedTimer, secs)
+                val status = if (session.pendingCloudPush || session.idToken.isNullOrBlank()) {
+                    CloudSyncStatus.OFFLINE_CACHED
+                } else {
+                    CloudSyncStatus.SYNCED
+                }
+                _uiState.update {
+                    it.copy(
+                        isAuthLoading = false,
+                        showAuthScreen = false,
+                        currentUserEmail = session.email,
+                        currentUserId = session.userId,
+                        cloudSyncStatus = status,
+                        data = userState,
+                        timer = restoredTimer
+                    )
+                }
+                FocusNotificationManager.syncAllTaskReminders(appContext, userState.tasks, userState.settings)
+                startBackgroundCloudSyncLoop()
+            } else {
+                val code = result.exceptionOrNull()?.message ?: "AUTH_FAILED"
+                val localizedError = localizeAuthError(code, isArabic)
+                _uiState.update {
+                    it.copy(
+                        isAuthLoading = false,
+                        authErrorMessage = localizedError,
+                        cloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED
+                    )
+                }
+            }
+        }
+    }
+
+    fun signOut() {
+        cloudSyncJob?.cancel()
+        timerJob?.cancel()
+        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
+        FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+        viewModelScope.launch {
+            repository.signOut()
+            val anonymousState = repository.loadState()
+            val secs = anonymousState.settings.pomodoroMinutes * 60
+            _uiState.update {
+                it.copy(
+                    currentUserEmail = null,
+                    currentUserId = null,
+                    cloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED,
+                    showAuthScreen = false,
+                    selectedTaskId = null,
+                    data = anonymousState,
+                    timer = TimerUiState(
+                        totalPhaseSeconds = secs,
+                        remainingSeconds = secs
+                    )
+                )
+            }
+            FocusNotificationManager.syncAllTaskReminders(appContext, anonymousState.tasks, anonymousState.settings)
+            syncWhiteNoise()
+        }
+    }
+
+    fun manualCloudSync() {
+        if (_uiState.value.currentUserEmail == null) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(cloudSyncStatus = CloudSyncStatus.SYNCING) }
+            val (remoteUpdatedState, newStatus) = repository.syncWithCloudIfSignedIn(_uiState.value.data)
+            _uiState.update { state ->
+                if (remoteUpdatedState != null) {
+                    FocusNotificationManager.syncAllTaskReminders(
+                        appContext,
+                        remoteUpdatedState.tasks,
+                        remoteUpdatedState.settings
+                    )
+                    state.copy(
+                        data = remoteUpdatedState,
+                        cloudSyncStatus = newStatus
+                    )
+                } else {
+                    state.copy(cloudSyncStatus = newStatus)
+                }
+            }
+        }
+    }
+
+    private fun startBackgroundCloudSyncLoop() {
+        cloudSyncJob?.cancel()
+        cloudSyncJob = viewModelScope.launch {
+            while (isActive && _uiState.value.currentUserEmail != null) {
+                delay(15_000L)
+                if (_uiState.value.currentUserEmail == null) break
+                val (remoteUpdatedState, newStatus) = repository.syncWithCloudIfSignedIn(_uiState.value.data)
+                _uiState.update { state ->
+                    if (remoteUpdatedState != null) {
+                        FocusNotificationManager.syncAllTaskReminders(
+                            appContext,
+                            remoteUpdatedState.tasks,
+                            remoteUpdatedState.settings
+                        )
+                        state.copy(
+                            data = remoteUpdatedState,
+                            cloudSyncStatus = newStatus
+                        )
+                    } else {
+                        state.copy(cloudSyncStatus = newStatus)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun localizeAuthError(code: String, isArabic: Boolean): String = when (code) {
+        "INVALID_EMAIL" -> if (isArabic) "يرجى إدخال بريد إلكتروني صحيح." else "Please enter a valid email address."
+        "WEAK_PASSWORD" -> if (isArabic) "كلمة المرور يجب أن تتكون من 6 أحرف على الأقل." else "Password must be at least 6 characters."
+        "EMPTY_PASSWORD" -> if (isArabic) "يرجى إدخال كلمة المرور." else "Please enter your password."
+        "EMAIL_EXISTS" -> if (isArabic) "هذا البريد الإلكتروني مسجل بالفعل. قم بتسجيل الدخول." else "This email is already registered. Please sign in."
+        "ACCOUNT_NOT_FOUND" -> if (isArabic) "لم يتم العثور على حساب بهذا البريد. أنشئ حساباً جديداً." else "No account found with this email. Please create an account."
+        "WRONG_PASSWORD" -> if (isArabic) "البريد الإلكتروني أو كلمة المرور غير صحيحة." else "Invalid email or password."
+        else -> if (isArabic) "تعذر الاتصال بالخادم ($code)." else "Authentication failed ($code)."
     }
 
     fun clearStatusBanner() {
@@ -1213,6 +1444,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         timerJob?.cancel()
+        cloudSyncJob?.cancel()
         soundSynthesizer.release()
     }
 }

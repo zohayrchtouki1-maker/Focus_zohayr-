@@ -29,6 +29,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CalendarToday
@@ -127,6 +128,7 @@ fun MainTaskWorkspace(
     onToggleTaskCompleted: (String) -> Unit,
     onInspectTask: (String) -> Unit,
     onStartFocusForTask: (String) -> Unit,
+    onOpenAuth: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isArabic = uiState.data.settings.language == AppLanguage.AR
@@ -262,6 +264,17 @@ fun MainTaskWorkspace(
                         tint = topBarContrastColor
                     )
                 }
+            }
+
+            IconButton(
+                onClick = onOpenAuth,
+                modifier = Modifier.testTag("open_auth_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AccountCircle,
+                    contentDescription = if (isArabic) "حسابي والمزامنة" else "Account & Cloud Sync",
+                    tint = if (uiState.currentUserEmail != null) ForestEmerald else topBarContrastColor
+                )
             }
 
             // Language Toggle Chip ("EN" / "AR")

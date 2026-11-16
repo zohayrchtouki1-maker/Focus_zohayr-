@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.Archive
@@ -31,6 +33,8 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
@@ -71,9 +75,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.CloudSyncStatus
 import com.example.i18n.Strings
 import com.example.i18n.formatDuration
 import com.example.i18n.label
+import com.example.model.AppLanguage
 import com.example.model.FolderItem
 import com.example.model.ProjectItem
 import com.example.model.SmartListType
@@ -96,6 +102,7 @@ fun SidebarPanel(
     onOpenReports: () -> Unit,
     onOpenForest: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAuth: () -> Unit = {},
     onAddFolder: (String) -> Unit,
     onRenameFolder: (String, String) -> Unit,
     onDeleteFolder: (String) -> Unit,
@@ -116,6 +123,7 @@ fun SidebarPanel(
 
     val scrollState = rememberScrollState()
     val data = uiState.data
+    val isArabic = data.settings.language == AppLanguage.AR
 
     Column(
         modifier = modifier
@@ -125,50 +133,145 @@ fun SidebarPanel(
             .verticalScroll(scrollState)
             .padding(horizontal = 12.dp, vertical = 14.dp)
     ) {
-        // Profile / Local Sync Header
+        // Profile / Cloud Sync Header
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onOpenAuth() }
+                        .padding(vertical = 2.dp)
+                        .testTag("sidebar_account_row")
                 ) {
                     Box(
                         modifier = Modifier
                             .size(38.dp)
                             .clip(CircleShape)
-                            .background(CoralPrimary),
+                            .background(MaterialTheme.colorScheme.primary),
                         contentAlignment = Alignment.Center
                     ) {
-                        TomatoIcon(filled = true, size = 22.dp, tint = Color.White)
+                        if (uiState.currentUserEmail != null) {
+                            Icon(
+                                imageVector = Icons.Default.AccountCircle,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        } else {
+                            TomatoIcon(filled = true, size = 22.dp, tint = Color.White)
+                        }
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = s.appTitle,
+                            text = uiState.currentUserEmail ?: s.appTitle,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        val (syncIcon, syncTint, syncLabel) = when (uiState.cloudSyncStatus) {
+                            CloudSyncStatus.SYNCED -> Triple(
+                                Icons.Default.CloudDone,
+                                ForestEmerald,
+                                if (isArabic) "متزامن سحابياً (${uiState.firebaseProjectId})" else "Cloud Synced (${uiState.firebaseProjectId})"
+                            )
+                            CloudSyncStatus.SYNCING -> Triple(
+                                Icons.Default.CloudSync,
+                                MaterialTheme.colorScheme.primary,
+                                if (isArabic) "جارٍ المزامنة السحابية..." else "Syncing to Cloud..."
+                            )
+                            CloudSyncStatus.OFFLINE_CACHED -> Triple(
+                                Icons.Default.CloudQueue,
+                                SunlightGold,
+                                if (isArabic) "محفوظ محلياً • بانتظار الإنترنت" else "Cached Offline • Auto-syncs"
+                            )
+                            CloudSyncStatus.UNAUTHENTICATED -> Triple(
+                                Icons.Default.CloudQueue,
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                                if (isArabic) "سجل الدخول للمزامنة السحابية" else "Sign in for Cloud Sync"
+                            )
+                        }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.CloudDone,
+                                imageVector = syncIcon,
                                 contentDescription = null,
-                                tint = ForestEmerald,
+                                tint = syncTint,
                                 modifier = Modifier.size(13.dp)
                             )
                             Text(
-                                text = s.localSyncReady,
+                                text = syncLabel,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = syncTint,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Sign In / Account Pill Button
+                Surface(
+                    shape = CircleShape,
+                    color = if (uiState.currentUserEmail != null) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(CircleShape)
+                        .clickable { onOpenAuth() }
+                        .testTag("sidebar_auth_button")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (uiState.currentUserEmail != null) {
+                                Icons.Default.AccountCircle
+                            } else {
+                                Icons.AutoMirrored.Filled.Login
+                            },
+                            contentDescription = null,
+                            tint = if (uiState.currentUserEmail != null) {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            } else {
+                                Color.White
+                            },
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (uiState.currentUserEmail != null) {
+                                if (isArabic) "حسابي والمزامنة / تسجيل الخروج" else "Account & Cloud Sync / Log Out"
+                            } else {
+                                if (isArabic) "تسجيل الدخول / إنشاء حساب" else "Sign In / Create Account"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (uiState.currentUserEmail != null) {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            } else {
+                                Color.White
+                            }
+                        )
                     }
                 }
 
