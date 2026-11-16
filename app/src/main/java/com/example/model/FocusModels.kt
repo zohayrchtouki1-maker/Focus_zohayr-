@@ -113,7 +113,7 @@ data class FolderItem(
 data class ProjectItem(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val colorHex: String = "#E74F44",
+    val colorHex: String = "#E05246",
     val folderId: String? = null,
     val isArchived: Boolean = false
 )
@@ -122,7 +122,7 @@ data class ProjectItem(
 data class TagItem(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val colorHex: String = "#0EA5E9"
+    val colorHex: String = "#3B7BF6"
 )
 
 @JsonClass(generateAdapter = true)
@@ -184,7 +184,7 @@ data class AppSettings(
     val alarmSoundAndVibration: Boolean = true,
     val lockedInRecentsConfirmed: Boolean = false,
     val hasPromptedPermissionsOnLaunch: Boolean = false,
-    val darkTheme: Boolean = false,
+    val darkTheme: Boolean = true,
     val language: AppLanguage = AppLanguage.AR,
     val whiteNoise: WhiteNoiseType = WhiteNoiseType.NONE,
     val whiteNoiseVolume: Float = 0.6f

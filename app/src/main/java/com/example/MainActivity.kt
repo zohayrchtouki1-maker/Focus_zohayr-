@@ -9,9 +9,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.common.api.CommonStatusCodes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -27,19 +24,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -52,8 +44,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.i18n.AppStrings
 import com.example.model.AppLanguage
-import com.example.ui.components.AccountAuthDialog
+import com.example.model.TaskPriority
 import com.example.ui.components.BackgroundTimerPermissionsDialog
+import com.example.ui.components.CalendarDialog
 import com.example.ui.components.FloatingMiniTimerBar
 import com.example.ui.components.ForestDialog
 import com.example.ui.components.FullScreenTimerOverlay
@@ -66,7 +59,6 @@ import com.example.ui.theme.CoralPrimary
 import com.example.ui.theme.FocusTodoTheme
 import com.example.viewmodel.FocusTodoViewModel
 import com.example.viewmodel.MainUiState
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -113,30 +105,6 @@ fun FocusTodoAppRoot(
         viewModel.refreshSystemPermissions()
     }
 
-    val googleSignInLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-        try {
-            val account = task.getResult(ApiException::class.java)
-            if (account != null) {
-                viewModel.onGoogleSignInResult(account)
-            } else {
-                viewModel.onGoogleSignInFailed("Google Sign-In returned empty account.")
-            }
-        } catch (e: ApiException) {
-            val statusName = CommonStatusCodes.getStatusCodeString(e.statusCode)
-            val detail = if (e.statusCode == 10) {
-                "DEVELOPER_ERROR (code 10): Register your app's SHA-1 fingerprint & package name (com.aistudio.focustodo.arpmzq) in Google Cloud Console OAuth 2.0 Android Client."
-            } else {
-                "$statusName (code ${e.statusCode}): ${e.localizedMessage ?: e.message ?: "Sign-in failed"}"
-            }
-            viewModel.onGoogleSignInFailed(detail)
-        } catch (e: Exception) {
-            viewModel.onGoogleSignInFailed(e.localizedMessage ?: e.message ?: "Google Sign-In failed")
-        }
-    }
-
     LaunchedEffect(uiState.permissionRequestTrigger) {
         if (uiState.permissionRequestTrigger > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (!uiState.systemPermissions.notificationsGranted) {
@@ -160,8 +128,6 @@ fun FocusTodoAppRoot(
             }
 
             val selectedTask = uiState.data.tasks.find { it.id == uiState.selectedTaskId }
-            val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-            val scope = rememberCoroutineScope()
 
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val isExpanded = maxWidth >= 900.dp
@@ -177,7 +143,6 @@ fun FocusTodoAppRoot(
                                 onOpenReports = { viewModel.setShowReports(true) },
                                 onOpenForest = { viewModel.setShowForest(true) },
                                 onOpenSettings = { viewModel.setShowSettings(true) },
-                                onOpenAuth = { viewModel.setShowAuthScreen(true) },
                                 onAddFolder = { viewModel.addFolder(it) },
                                 onRenameFolder = { id, name -> viewModel.renameFolder(id, name) },
                                 onDeleteFolder = { viewModel.deleteFolder(it) },
@@ -189,7 +154,8 @@ fun FocusTodoAppRoot(
                                 onDeleteProject = { viewModel.deleteProject(it) },
                                 onAddTag = { name, color -> viewModel.addTag(name, color) },
                                 onDeleteTag = { viewModel.deleteTag(it) },
-                                modifier = Modifier.width(275.dp)
+                                onOpenCalendar = { viewModel.setShowCalendar(true) },
+                                modifier = Modifier.width(290.dp)
                             )
 
                             VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -211,9 +177,7 @@ fun FocusTodoAppRoot(
                                     },
                                     onToggleTaskCompleted = { viewModel.toggleTaskCompleted(it) },
                                     onInspectTask = { viewModel.openTaskInspector(it) },
-                                    onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) },
-                                    onOpenAuth = { viewModel.setShowAuthScreen(true) },
-                                    onManualSync = { viewModel.manualCloudSync() }
+                                    onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) }
                                 )
 
                                 FloatingMiniTimerBar(
@@ -249,34 +213,24 @@ fun FocusTodoAppRoot(
                         }
                     }
                 } else {
-                    // Compact / Medium Phone Layout with Navigation Drawer + Slide-over Inspector
-                    ModalNavigationDrawer(
-                        drawerState = drawerState,
-                        drawerContent = {
-                            ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
+                    // Compact / Medium Phone Layout:
+                    // Main Home Screen (الرئيسية) <-> Task List Screen (المهام) + Slide-over Task Detail (تفاصيل المهمة)
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background,
+                        contentColor = MaterialTheme.colorScheme.onBackground
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            if (uiState.showHomeScreenOnCompact) {
                                 SidebarPanel(
                                     uiState = uiState,
                                     s = s,
-                                    onSelectDestination = {
-                                        viewModel.selectDestination(it)
-                                        scope.launch { drawerState.close() }
+                                    onSelectDestination = { dest ->
+                                        viewModel.selectDestination(dest)
                                     },
-                                    onOpenReports = {
-                                        scope.launch { drawerState.close() }
-                                        viewModel.setShowReports(true)
-                                    },
-                                    onOpenForest = {
-                                        scope.launch { drawerState.close() }
-                                        viewModel.setShowForest(true)
-                                    },
-                                    onOpenSettings = {
-                                        scope.launch { drawerState.close() }
-                                        viewModel.setShowSettings(true)
-                                    },
-                                    onOpenAuth = {
-                                        scope.launch { drawerState.close() }
-                                        viewModel.setShowAuthScreen(true)
-                                    },
+                                    onOpenReports = { viewModel.setShowReports(true) },
+                                    onOpenForest = { viewModel.setShowForest(true) },
+                                    onOpenSettings = { viewModel.setShowSettings(true) },
                                     onAddFolder = { viewModel.addFolder(it) },
                                     onRenameFolder = { id, name -> viewModel.renameFolder(id, name) },
                                     onDeleteFolder = { viewModel.deleteFolder(it) },
@@ -287,22 +241,19 @@ fun FocusTodoAppRoot(
                                     onToggleArchiveProject = { viewModel.toggleArchiveProject(it) },
                                     onDeleteProject = { viewModel.deleteProject(it) },
                                     onAddTag = { name, color -> viewModel.addTag(name, color) },
-                                    onDeleteTag = { viewModel.deleteTag(it) }
+                                    onDeleteTag = { viewModel.deleteTag(it) },
+                                    onOpenCalendar = { viewModel.setShowCalendar(true) },
+                                    modifier = Modifier.fillMaxSize()
                                 )
-                            }
-                        }
-                    ) {
-                        Surface(
-                            modifier = Modifier.fillMaxSize(),
-                            color = MaterialTheme.colorScheme.background,
-                            contentColor = MaterialTheme.colorScheme.onBackground
-                        ) {
-                            Box(modifier = Modifier.fillMaxSize()) {
+                            } else {
+                                BackHandler {
+                                    viewModel.setShowHomeScreenOnCompact(true)
+                                }
                                 MainTaskWorkspace(
                                     uiState = uiState,
                                     s = s,
                                     isCompact = true,
-                                    onOpenDrawer = { scope.launch { drawerState.open() } },
+                                    onOpenDrawer = { viewModel.setShowHomeScreenOnCompact(true) },
                                     onOpenReports = { viewModel.setShowReports(true) },
                                     onOpenForest = { viewModel.setShowForest(true) },
                                     onToggleLanguage = { viewModel.toggleLanguage() },
@@ -314,24 +265,22 @@ fun FocusTodoAppRoot(
                                     },
                                     onToggleTaskCompleted = { viewModel.toggleTaskCompleted(it) },
                                     onInspectTask = { viewModel.openTaskInspector(it) },
-                                    onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) },
-                                    onOpenAuth = { viewModel.setShowAuthScreen(true) },
-                                    onManualSync = { viewModel.manualCloudSync() }
-                                )
-
-                                FloatingMiniTimerBar(
-                                    uiState = uiState,
-                                    s = s,
-                                    onExpand = { viewModel.setShowFullScreenTimer(true) },
-                                    onStartOrResume = { viewModel.startOrResumeTimer() },
-                                    onPause = { viewModel.pauseTimer() },
-                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                    onStartFocusForTask = { viewModel.startFocusForTask(it, openFullScreen = true) }
                                 )
                             }
+
+                            FloatingMiniTimerBar(
+                                uiState = uiState,
+                                s = s,
+                                onExpand = { viewModel.setShowFullScreenTimer(true) },
+                                onStartOrResume = { viewModel.startOrResumeTimer() },
+                                onPause = { viewModel.pauseTimer() },
+                                modifier = Modifier.align(Alignment.BottomCenter)
+                            )
                         }
                     }
 
-                    // Slide-Over Right Task Inspector for Compact Screens
+                    // Slide-Over Task Detail Screen (تفاصيل المهمة) for Compact Screens
                     AnimatedVisibility(
                         visible = selectedTask != null,
                         enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
@@ -341,7 +290,7 @@ fun FocusTodoAppRoot(
                             BackHandler { viewModel.openTaskInspector(null) }
                             Surface(
                                 modifier = Modifier.fillMaxSize(),
-                                color = MaterialTheme.colorScheme.surface
+                                color = MaterialTheme.colorScheme.background
                             ) {
                                 TaskInspectorPanel(
                                     task = task,
@@ -363,6 +312,30 @@ fun FocusTodoAppRoot(
                             }
                         }
                     }
+                }
+
+                // Calendar Screen (التقويم)
+                if (uiState.showCalendar) {
+                    CalendarDialog(
+                        uiState = uiState,
+                        s = s,
+                        onDismiss = { viewModel.setShowCalendar(false) },
+                        onAddTaskOnDate = { title, epochDay, reminderTime ->
+                            viewModel.addTask(
+                                title = title,
+                                estimatedPomodoros = 1,
+                                dueDateEpochDay = epochDay,
+                                isSomeday = false,
+                                isEvent = true,
+                                priority = TaskPriority.NONE,
+                                projectId = null,
+                                tagIds = emptyList(),
+                                reminderTime = reminderTime
+                            )
+                        },
+                        onInspectTask = { taskId -> viewModel.openTaskInspector(taskId) },
+                        onToggleTaskCompleted = { taskId -> viewModel.toggleTaskCompleted(taskId) }
+                    )
                 }
 
                 // Full-Screen Pomodoro Timer Overlay
@@ -388,7 +361,7 @@ fun FocusTodoAppRoot(
                     )
                 }
 
-                // Reports & Analytics Modal
+                // Statistics Screen (الإحصائيات)
                 AnimatedVisibility(
                     visible = uiState.showReports,
                     enter = fadeIn() + slideInVertically(initialOffsetY = { it / 6 }),
@@ -418,7 +391,7 @@ fun FocusTodoAppRoot(
                     )
                 }
 
-                // Settings Modal
+                // Settings Screen (الإعدادات)
                 AnimatedVisibility(
                     visible = uiState.showSettings,
                     enter = fadeIn() + slideInVertically(initialOffsetY = { it / 6 }),
@@ -432,7 +405,9 @@ fun FocusTodoAppRoot(
                         onRequestPermissions = { viewModel.requestNativePermissionsIfMissing() },
                         onOpenBackgroundPermissionsModal = { viewModel.setShowBackgroundPermissionsModal(true) },
                         onExportJson = { viewModel.exportBackupJson() },
-                        onImportJson = { viewModel.importBackupJson(it) },
+                        onCreateShareableBackupFile = { viewModel.createShareableBackupFile() },
+                        onParseBackupPreview = { viewModel.parseBackupPreview(it) },
+                        onImportBackupState = { parsed, mode -> viewModel.importBackupState(parsed, mode) },
                         onResetDemoData = { viewModel.resetDemoData() }
                     )
                 }
@@ -450,30 +425,6 @@ fun FocusTodoAppRoot(
                         onToggleLockedInRecents = { confirmed ->
                             viewModel.updateSettings { it.copy(lockedInRecentsConfirmed = confirmed) }
                         }
-                    )
-                }
-
-                // Account Sign In with Google / Google Drive AppData Sync Screen
-                AnimatedVisibility(
-                    visible = uiState.showAuthScreen,
-                    enter = fadeIn() + slideInVertically(initialOffsetY = { it / 6 }),
-                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 6 })
-                ) {
-                    AccountAuthDialog(
-                        currentUserEmail = uiState.currentUserEmail,
-                        currentUserId = uiState.currentUserId,
-                        cloudSyncStatus = uiState.cloudSyncStatus,
-                        cloudSyncErrorMessage = uiState.cloudSyncErrorMessage,
-                        isAuthLoading = uiState.isAuthLoading,
-                        authErrorMessage = uiState.authErrorMessage,
-                        language = settings.language,
-                        onDismiss = { viewModel.setShowAuthScreen(false) },
-                        onSignInWithGoogle = {
-                            viewModel.onGoogleSignInStarted()
-                            googleSignInLauncher.launch(viewModel.getGoogleSignInIntent())
-                        },
-                        onSignOut = { viewModel.signOut() },
-                        onManualSync = { viewModel.manualCloudSync() }
                     )
                 }
             }

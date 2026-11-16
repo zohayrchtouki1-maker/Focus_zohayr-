@@ -25,37 +25,29 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircleOutline
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Park
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -63,13 +55,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.minimumInteractiveComponentSize
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -79,14 +66,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.data.CloudSyncStatus
+import androidx.compose.ui.unit.sp
 import com.example.data.DateUtils
 import com.example.i18n.Strings
 import com.example.i18n.formatDuration
@@ -99,13 +90,27 @@ import com.example.model.TagItem
 import com.example.model.TaskItem
 import com.example.model.TaskPriority
 import com.example.model.TaskSortOption
+import com.example.ui.theme.CatTomorrowOrange
 import com.example.ui.theme.CoralPrimary
+import com.example.ui.theme.DarkIconMuted
+import com.example.ui.theme.DarkOutline
+import com.example.ui.theme.DarkPillText
+import com.example.ui.theme.DarkSurface
+import com.example.ui.theme.DarkSurfaceVariant
+import com.example.ui.theme.DarkTextPrimary
+import com.example.ui.theme.DarkTextSecondary
 import com.example.ui.theme.ForestEmerald
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.PriorityLowColor
-import com.example.ui.theme.SunlightGold
 import com.example.viewmodel.MainUiState
 import com.example.viewmodel.NavDestination
+
+private fun formatHoursMinutesColon(totalMinutes: Int): String {
+    val safe = totalMinutes.coerceAtLeast(0)
+    val h = safe / 60
+    val m = safe % 60
+    return "%02d:%02d".format(h, m)
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -134,11 +139,10 @@ fun MainTaskWorkspace(
     onToggleTaskCompleted: (String) -> Unit,
     onInspectTask: (String) -> Unit,
     onStartFocusForTask: (String) -> Unit,
-    onOpenAuth: () -> Unit = {},
-    onManualSync: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isArabic = uiState.data.settings.language == AppLanguage.AR
+    val isDark = uiState.data.settings.darkTheme
     val today = remember { DateUtils.todayEpochDay() }
     val (activeTasks, completedTasks) = remember(
         uiState.data.tasks,
@@ -165,6 +169,7 @@ fun MainTaskWorkspace(
 
     // Quick-Add Bar State
     var quickTitle by remember { mutableStateOf("") }
+    var quickInputFocused by remember { mutableStateOf(false) }
     var quickPomodoros by remember { mutableIntStateOf(1) }
     var quickPriority by remember { mutableStateOf(TaskPriority.NONE) }
     var quickDueEpochDay by remember(uiState.destination) {
@@ -219,7 +224,11 @@ fun MainTaskWorkspace(
         quickReminderTime = null
     }
 
-    val topBarContrastColor = if (uiState.data.settings.darkTheme) Color(0xFFFFFFFF) else Color(0xFF1F1F1F)
+    val primaryTextColor = if (isDark) DarkTextPrimary else MaterialTheme.colorScheme.onBackground
+    val secondaryTextColor = if (isDark) DarkTextSecondary else MaterialTheme.colorScheme.onSurfaceVariant
+    val cardBgColor = if (isDark) DarkSurface else MaterialTheme.colorScheme.surface
+    val cardBorderColor = if (isDark) DarkOutline else MaterialTheme.colorScheme.outline
+    val pillSurfaceColor = if (isDark) DarkSurfaceVariant else MaterialTheme.colorScheme.surfaceVariant
 
     Column(
         modifier = modifier
@@ -227,103 +236,66 @@ fun MainTaskWorkspace(
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
     ) {
-        // Header Row (TopAppBar)
+        // Top bar: Right-aligned `>` back chevron + "المهام" (18sp Bold #F2F2F5); left-aligned `•••` menu
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (isCompact) {
                 IconButton(
                     onClick = onOpenDrawer,
-                    modifier = Modifier.testTag("open_drawer_button")
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("open_drawer_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Menu,
-                        contentDescription = "Menu",
-                        tint = topBarContrastColor
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                        contentDescription = "Back",
+                        tint = primaryTextColor,
+                        modifier = Modifier.size(26.dp)
                     )
                 }
+            } else {
+                Spacer(modifier = Modifier.width(6.dp))
             }
+
             Text(
                 text = destinationTitle,
-                style = MaterialTheme.typography.headlineMedium,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
-                color = topBarContrastColor,
+                color = primaryTextColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
 
-            if (isCompact) {
-                IconButton(onClick = onOpenReports) {
-                    Icon(
-                        imageVector = Icons.Default.BarChart,
-                        contentDescription = s.reports,
-                        tint = topBarContrastColor
-                    )
-                }
-                IconButton(onClick = onOpenForest) {
-                    Icon(
-                        imageVector = Icons.Default.Park,
-                        contentDescription = s.forest,
-                        tint = topBarContrastColor
-                    )
-                }
-            }
-
-            // Language Toggle Chip ("EN" / "AR")
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(1.dp, topBarContrastColor.copy(alpha = 0.65f)),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onToggleLanguage)
-                    .testTag("language_toggle_button")
-            ) {
-                Text(
-                    text = if (isArabic) "EN" else "AR",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = topBarContrastColor,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
-                )
-            }
-
-            IconButton(onClick = onToggleTheme, modifier = Modifier.testTag("theme_toggle_button")) {
-                Icon(
-                    imageVector = if (uiState.data.settings.darkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
-                    contentDescription = s.darkMode,
-                    tint = topBarContrastColor
-                )
-            }
-
-            IconButton(onClick = onToggleShowCompleted, modifier = Modifier.testTag("toggle_completed_button")) {
-                Icon(
-                    imageVector = if (uiState.showCompletedAccordion) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                    contentDescription = if (uiState.showCompletedAccordion) s.hideCompleted else s.showCompleted,
-                    tint = topBarContrastColor
-                )
-            }
-
             Box {
-                IconButton(onClick = { sortMenuOpen = true }, modifier = Modifier.testTag("sort_menu_button")) {
+                IconButton(
+                    onClick = { sortMenuOpen = true },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("sort_menu_button")
+                ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Sort,
+                        imageVector = Icons.Default.MoreHoriz,
                         contentDescription = s.sortBy,
-                        tint = topBarContrastColor
+                        tint = if (isDark) DarkIconMuted else primaryTextColor,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
-                DropdownMenu(expanded = sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {
+                DropdownMenu(
+                    expanded = sortMenuOpen,
+                    onDismissRequest = { sortMenuOpen = false }
+                ) {
                     TaskSortOption.entries.forEach { option ->
                         DropdownMenuItem(
                             text = { Text(option.label(s)) },
                             trailingIcon = {
                                 if (uiState.sortOption == option) {
                                     Icon(Icons.Default.Check, null, tint = CoralPrimary)
-                                }
+                                                                    }
                             },
                             onClick = {
                                 onSortChange(option)
@@ -331,192 +303,45 @@ fun MainTaskWorkspace(
                             }
                         )
                     }
-                }
-            }
-        }
-
-        // Top Bar Cloud Sync Status Bar + Manual "Sync Now" Button + Account Button
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val statusColor = when (uiState.cloudSyncStatus) {
-                CloudSyncStatus.SYNCED -> ForestEmerald
-                CloudSyncStatus.SYNCING -> MaterialTheme.colorScheme.primary
-                CloudSyncStatus.SYNC_FAILED -> Color(0xFFEF4444)
-                CloudSyncStatus.UNAUTHENTICATED -> MaterialTheme.colorScheme.onSurfaceVariant
-            }
-            val statusText = when (uiState.cloudSyncStatus) {
-                CloudSyncStatus.SYNCED -> "Synced"
-                CloudSyncStatus.SYNCING -> "Syncing..."
-                CloudSyncStatus.SYNC_FAILED -> "Sync Failed"
-                CloudSyncStatus.UNAUTHENTICATED -> if (isArabic) "سجل الدخول للمزامنة (Sign In)" else "Sign In to Sync"
-            }
-
-            // Cloud Sync Status Indicator Pill
-            Surface(
-                shape = CircleShape,
-                color = statusColor.copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.55f)),
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable(onClick = onOpenAuth)
-                    .testTag("top_bar_cloud_sync_status")
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    when (uiState.cloudSyncStatus) {
-                        CloudSyncStatus.SYNCED -> {
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text(if (uiState.showCompletedAccordion) s.hideCompleted else s.showCompleted) },
+                        leadingIcon = {
                             Icon(
-                                imageVector = Icons.Default.CloudDone,
-                                contentDescription = "Synced",
-                                tint = ForestEmerald,
-                                modifier = Modifier.size(16.dp)
+                                if (uiState.showCompletedAccordion) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null
                             )
-                        }
-                        CloudSyncStatus.SYNCING -> {
-                            CircularProgressIndicator(
-                                color = statusColor,
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                        CloudSyncStatus.SYNC_FAILED -> {
+                        },
+                        onClick = {
+                            onToggleShowCompleted()
+                            sortMenuOpen = false
+                        },
+                        modifier = Modifier.testTag("toggle_completed_button")
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (isDark) (if (isArabic) "الوضع الفاتح" else "Light Mode") else s.darkMode) },
+                        leadingIcon = {
                             Icon(
-                                imageVector = Icons.Default.CloudOff,
-                                contentDescription = "Sync Failed",
-                                tint = Color(0xFFEF4444),
-                                modifier = Modifier.size(16.dp)
+                                if (isDark) Icons.Default.LightMode else Icons.Default.DarkMode,
+                                contentDescription = null
                             )
-                        }
-                        CloudSyncStatus.UNAUTHENTICATED -> {
-                            Icon(
-                                imageVector = Icons.Default.CloudQueue,
-                                contentDescription = "Unauthenticated",
-                                tint = statusColor,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = statusColor
+                        },
+                        onClick = {
+                            onToggleTheme()
+                            sortMenuOpen = false
+                        },
+                        modifier = Modifier.testTag("theme_toggle_button")
                     )
-                    if (uiState.currentUserEmail != null) {
-                        Text(
-                            text = "• ${uiState.currentUserEmail}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // Manual "Sync Now" Button
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable(onClick = onManualSync)
-                    .testTag("top_bar_sync_now_button")
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Sync,
-                        contentDescription = "Sync Now",
-                        tint = Color.White,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Text(
-                        text = if (isArabic) "مزامنة الآن (Sync Now)" else "Sync Now",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
-            }
-
-            // Account Profile Button
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                modifier = Modifier
-                    .clip(CircleShape)
-                    .clickable(onClick = onOpenAuth)
-                    .testTag("open_auth_button")
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AccountCircle,
-                        contentDescription = "Account",
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = if (isArabic) "حسابي" else "Account",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                }
-            }
-        }
-
-        // Exact Error Message Banner when Cloud Sync Fails
-        if (uiState.cloudSyncStatus == CloudSyncStatus.SYNC_FAILED && !uiState.cloudSyncErrorMessage.isNullOrBlank()) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = Color(0xFFEF4444).copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.6f)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = 8.dp)
-                    .testTag("top_bar_sync_error_banner")
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CloudOff,
-                        contentDescription = "Sync Failed",
-                        tint = Color(0xFFEF4444),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Sync Failed: ${uiState.cloudSyncErrorMessage}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFEF4444),
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
+                    DropdownMenuItem(
+                        text = { Text(if (isArabic) "English" else "العربية") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Language, contentDescription = null)
+                        },
+                        onClick = {
+                            onToggleLanguage()
+                            sortMenuOpen = false
+                        },
+                        modifier = Modifier.testTag("language_toggle_button")
                     )
                 }
             }
@@ -525,353 +350,311 @@ fun MainTaskWorkspace(
         // Scrollable Workspace Content
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 110.dp),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 110.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 4-Metric Summary Dashboard Bar (Symmetrical 2x2 Grid on Compact / 4-Card Horizontal Grid on Expanded)
+            // Top Summary Card (#1C1C21, 12dp radius): 4-column horizontal metric bar (right to left)
+            // الوقت المقدر (00:00), مهام غير مكتملة (0), الوقت المستغرق (00:00), المهام المكتملة (0)
+            // with numbers in #E05246 20sp Bold
             item {
-                if (isCompact) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            SummaryMetricCard(
-                                label = s.estimatedTime,
-                                value = formatDuration(estimatedMinutes, s),
-                                accent = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.weight(1f)
-                            )
-                            SummaryMetricCard(
-                                label = s.tasksRemaining,
-                                value = remainingCount.toString(),
-                                accent = SunlightGold,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            SummaryMetricCard(
-                                label = s.elapsedFocusTime,
-                                value = formatDuration(elapsedMinutes, s),
-                                accent = PriorityLowColor,
-                                modifier = Modifier.weight(1f)
-                            )
-                            SummaryMetricCard(
-                                label = s.completedTasks,
-                                value = completedCount.toString(),
-                                accent = ForestEmerald,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                } else {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = cardBgColor,
+                    border = BorderStroke(1.dp, cardBorderColor),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        SummaryMetricCard(
+                        SummaryMetricColumn(
+                            value = formatHoursMinutesColon(estimatedMinutes),
                             label = s.estimatedTime,
-                            value = formatDuration(estimatedMinutes, s),
-                            accent = MaterialTheme.colorScheme.primary,
+                            secondaryColor = secondaryTextColor,
                             modifier = Modifier.weight(1f)
                         )
-                        SummaryMetricCard(
-                            label = s.tasksRemaining,
+                        SummaryMetricColumn(
                             value = remainingCount.toString(),
-                            accent = SunlightGold,
+                            label = s.tasksRemaining,
+                            secondaryColor = secondaryTextColor,
                             modifier = Modifier.weight(1f)
                         )
-                        SummaryMetricCard(
+                        SummaryMetricColumn(
+                            value = formatHoursMinutesColon(elapsedMinutes),
                             label = s.elapsedFocusTime,
-                            value = formatDuration(elapsedMinutes, s),
-                            accent = PriorityLowColor,
+                            secondaryColor = secondaryTextColor,
                             modifier = Modifier.weight(1f)
                         )
-                        SummaryMetricCard(
-                            label = s.completedTasks,
+                        SummaryMetricColumn(
                             value = completedCount.toString(),
-                            accent = ForestEmerald,
+                            label = s.completedTasks,
+                            secondaryColor = secondaryTextColor,
                             modifier = Modifier.weight(1f)
                         )
                     }
                 }
             }
 
-            // Quick-Add Task Input Bar
+            // Quick Add Task Bar (#1C1C21, 12dp radius): Right-aligned `+` icon and "إضافة مهمة..." placeholder in #7E7E8A
             if (uiState.destination != NavDestination.SmartList(SmartListType.COMPLETED)) {
                 item {
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        tonalElevation = 2.dp,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        shape = RoundedCornerShape(12.dp),
+                        color = cardBgColor,
+                        border = BorderStroke(1.dp, cardBorderColor),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp)
+                        ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                OutlinedTextField(
-                                    value = quickTitle,
-                                    onValueChange = { quickTitle = it },
-                                    placeholder = {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = s.add,
+                                    tint = secondaryTextColor,
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .clickable {
+                                            if (quickTitle.isNotBlank()) submitQuickTask()
+                                        }
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Box(
+                                    modifier = Modifier.weight(1f),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    if (quickTitle.isEmpty()) {
                                         Text(
-                                            text = "${s.addTaskPlaceholder} $destinationTitle...",
+                                            text = s.addTaskPlaceholder,
+                                            fontSize = 14.sp,
+                                            color = secondaryTextColor,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                    },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                    keyboardActions = KeyboardActions(onDone = { submitQuickTask() }),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                        unfocusedBorderColor = Color.Transparent
-                                    ),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("quick_add_input")
-                                )
-                                Surface(
-                                    shape = CircleShape,
-                                    color = if (quickTitle.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-                                    modifier = Modifier
-                                        .minimumInteractiveComponentSize()
-                                        .clip(CircleShape)
-                                        .clickable(enabled = quickTitle.isNotBlank()) { submitQuickTask() }
-                                        .testTag("quick_add_submit_button")
-                                ) {
-                                    Box(
-                                        contentAlignment = Alignment.Center,
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                                    }
+                                    BasicTextField(
+                                        value = quickTitle,
+                                        onValueChange = { quickTitle = it },
+                                        singleLine = true,
+                                        textStyle = TextStyle(
+                                            color = primaryTextColor,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Medium
+                                        ),
+                                        cursorBrush = SolidColor(CoralPrimary),
+                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                        keyboardActions = KeyboardActions(onDone = { submitQuickTask() }),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .onFocusChanged { quickInputFocused = it.isFocused }
+                                            .testTag("quick_add_input")
+                                    )
+                                }
+
+                                if (quickTitle.isNotBlank()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = CoralPrimary,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { submitQuickTask() }
+                                            .testTag("quick_add_submit_button")
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Add,
-                                            contentDescription = s.add,
-                                            tint = if (quickTitle.isNotBlank()) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
+                                        Text(
+                                            text = s.add,
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                         )
                                     }
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            // Inline Quick Selectors (Tomatoes 1-5, Due Date, Priority, Project, Tags)
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                // 1-5 Tomato selector
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                            AnimatedVisibility(visible = quickInputFocused || quickTitle.isNotBlank()) {
+                                Column {
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        for (i in 1..5) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .clip(CircleShape)
-                                                    .clickable { quickPomodoros = i }
-                                                    .padding(2.dp)
+                                        // 1-5 Tomato selector
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = pillSurfaceColor
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                                             ) {
-                                                TomatoIcon(
-                                                    filled = i <= quickPomodoros,
-                                                    size = 16.dp
+                                                for (i in 1..5) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .clip(CircleShape)
+                                                            .clickable { quickPomodoros = i }
+                                                            .padding(2.dp)
+                                                    ) {
+                                                        TomatoIcon(
+                                                            filled = i <= quickPomodoros,
+                                                            size = 15.dp,
+                                                            tint = CoralPrimary
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Due Date & Time Picker Chip
+                                        Box {
+                                            val dateText = when {
+                                                quickIsSomeday -> s.someday
+                                                quickDueEpochDay != null -> {
+                                                    val d = DateUtils.formatEpochDay(quickDueEpochDay!!, isArabic)
+                                                    if (quickReminderTime != null) "$d • $quickReminderTime" else d
+                                                }
+                                                else -> s.dueDate
+                                            }
+                                            QuickSelectorPill(
+                                                icon = Icons.Default.CalendarToday,
+                                                label = dateText,
+                                                tint = CatTomorrowOrange,
+                                                onClick = { dateMenuOpen = true }
+                                            )
+                                            DropdownMenu(expanded = dateMenuOpen, onDismissRequest = { dateMenuOpen = false }) {
+                                                DropdownMenuItem(
+                                                    text = { Text(s.today) },
+                                                    onClick = {
+                                                        quickIsSomeday = false
+                                                        quickDueEpochDay = today
+                                                        dateMenuOpen = false
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text(s.tomorrow) },
+                                                    onClick = {
+                                                        quickIsSomeday = false
+                                                        quickDueEpochDay = today + 1
+                                                        dateMenuOpen = false
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text(s.someday) },
+                                                    onClick = {
+                                                        quickIsSomeday = true
+                                                        quickDueEpochDay = null
+                                                        quickReminderTime = null
+                                                        dateMenuOpen = false
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text(s.customDate) },
+                                                    onClick = {
+                                                        dateMenuOpen = false
+                                                        showCustomDatePicker = true
+                                                    }
                                                 )
                                             }
                                         }
-                                    }
-                                }
 
-                                // Due Date & Time Picker Chip
-                                Box {
-                                    val dateText = when {
-                                        quickIsSomeday -> s.someday
-                                        quickDueEpochDay != null -> {
-                                            val d = DateUtils.formatEpochDay(quickDueEpochDay!!, isArabic)
-                                            if (quickReminderTime != null) "$d • $quickReminderTime" else d
-                                        }
-                                        else -> s.dueDate
-                                    }
-                                    QuickSelectorPill(
-                                        icon = Icons.Default.CalendarToday,
-                                        label = dateText,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        onClick = { dateMenuOpen = true }
-                                    )
-                                    DropdownMenu(expanded = dateMenuOpen, onDismissRequest = { dateMenuOpen = false }) {
-                                        DropdownMenuItem(
-                                            text = { Text(s.today) },
-                                            onClick = {
-                                                quickIsSomeday = false
-                                                quickDueEpochDay = today
-                                                dateMenuOpen = false
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(s.tomorrow) },
-                                            onClick = {
-                                                quickIsSomeday = false
-                                                quickDueEpochDay = today + 1
-                                                dateMenuOpen = false
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(s.someday) },
-                                            onClick = {
-                                                quickIsSomeday = true
-                                                quickDueEpochDay = null
-                                                quickReminderTime = null
-                                                dateMenuOpen = false
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(s.customDate) },
-                                            onClick = {
-                                                dateMenuOpen = false
-                                                showCustomDatePicker = true
-                                            }
-                                        )
-                                    }
-                                }
-
-                                // Priority Picker Chip
-                                Box {
-                                    QuickSelectorPill(
-                                        icon = Icons.Default.Flag,
-                                        label = quickPriority.label(s),
-                                        tint = quickPriority.color(),
-                                        onClick = { priorityMenuOpen = true }
-                                    )
-                                    DropdownMenu(expanded = priorityMenuOpen, onDismissRequest = { priorityMenuOpen = false }) {
-                                        TaskPriority.entries.forEach { p ->
-                                            DropdownMenuItem(
-                                                text = { Text(p.label(s)) },
-                                                leadingIcon = { Icon(Icons.Default.Flag, null, tint = p.color()) },
-                                                onClick = {
-                                                    quickPriority = p
-                                                    priorityMenuOpen = false
-                                                }
+                                        // Priority Picker Chip
+                                        Box {
+                                            QuickSelectorPill(
+                                                icon = Icons.Default.Flag,
+                                                label = quickPriority.label(s),
+                                                tint = quickPriority.color(),
+                                                onClick = { priorityMenuOpen = true }
                                             )
-                                        }
-                                    }
-                                }
-
-                                // Project Picker Chip
-                                Box {
-                                    val chosenProject = uiState.data.projects.find { it.id == quickProjectId }
-                                    QuickSelectorPill(
-                                        icon = Icons.Default.FolderOpen,
-                                        label = chosenProject?.name ?: s.noProject,
-                                        tint = chosenProject?.let { parseHexColor(it.colorHex) }
-                                            ?: MaterialTheme.colorScheme.onSurfaceVariant,
-                                        onClick = { projectMenuOpen = true }
-                                    )
-                                    DropdownMenu(expanded = projectMenuOpen, onDismissRequest = { projectMenuOpen = false }) {
-                                        DropdownMenuItem(
-                                            text = { Text(s.noProject) },
-                                            onClick = {
-                                                quickProjectId = null
-                                                projectMenuOpen = false
-                                            }
-                                        )
-                                        uiState.data.projects.filter { !it.isArchived }.forEach { proj ->
-                                            DropdownMenuItem(
-                                                text = { Text(proj.name) },
-                                                onClick = {
-                                                    quickProjectId = proj.id
-                                                    projectMenuOpen = false
+                                            DropdownMenu(expanded = priorityMenuOpen, onDismissRequest = { priorityMenuOpen = false }) {
+                                                TaskPriority.entries.forEach { p ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(p.label(s)) },
+                                                        leadingIcon = { Icon(Icons.Default.Flag, null, tint = p.color()) },
+                                                        onClick = {
+                                                            quickPriority = p
+                                                            priorityMenuOpen = false
+                                                        }
+                                                    )
                                                 }
-                                            )
+                                            }
                                         }
-                                    }
-                                }
 
-                                // Tag Picker Chip
-                                Box {
-                                    val tagLabel = if (quickTagIds.isEmpty()) {
-                                        s.tags
-                                    } else {
-                                        uiState.data.tags
-                                            .filter { quickTagIds.contains(it.id) }
-                                            .joinToString(", ") { "#${it.name}" }
-                                    }
-                                    QuickSelectorPill(
-                                        icon = Icons.Default.Tag,
-                                        label = tagLabel,
-                                        tint = PriorityLowColor,
-                                        onClick = { tagMenuOpen = true }
-                                    )
-                                    DropdownMenu(expanded = tagMenuOpen, onDismissRequest = { tagMenuOpen = false }) {
-                                        uiState.data.tags.forEach { tag ->
-                                            val selected = quickTagIds.contains(tag.id)
-                                            DropdownMenuItem(
-                                                text = { Text("#${tag.name}") },
-                                                trailingIcon = {
-                                                    if (selected) Icon(Icons.Default.Check, null, tint = CoralPrimary)
-                                                },
-                                                onClick = {
-                                                    quickTagIds = if (selected) {
-                                                        quickTagIds - tag.id
-                                                    } else {
-                                                        quickTagIds + tag.id
+                                        // Project Picker Chip
+                                        Box {
+                                            val chosenProject = uiState.data.projects.find { it.id == quickProjectId }
+                                            QuickSelectorPill(
+                                                icon = Icons.Default.FolderOpen,
+                                                label = chosenProject?.name ?: s.noProject,
+                                                tint = chosenProject?.let { parseHexColor(it.colorHex) }
+                                                    ?: secondaryTextColor,
+                                                onClick = { projectMenuOpen = true }
+                                            )
+                                            DropdownMenu(expanded = projectMenuOpen, onDismissRequest = { projectMenuOpen = false }) {
+                                                DropdownMenuItem(
+                                                    text = { Text(s.noProject) },
+                                                    onClick = {
+                                                        quickProjectId = null
+                                                        projectMenuOpen = false
                                                     }
+                                                )
+                                                uiState.data.projects.filter { !it.isArchived }.forEach { proj ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(proj.name) },
+                                                        onClick = {
+                                                            quickProjectId = proj.id
+                                                            projectMenuOpen = false
+                                                        }
+                                                    )
                                                 }
+                                            }
+                                        }
+
+                                        // Tag Picker Chip
+                                        Box {
+                                            val tagLabel = if (quickTagIds.isEmpty()) {
+                                                s.tags
+                                            } else {
+                                                uiState.data.tags
+                                                    .filter { quickTagIds.contains(it.id) }
+                                                    .joinToString(", ") { "#${it.name}" }
+                                            }
+                                            QuickSelectorPill(
+                                                icon = Icons.Default.Tag,
+                                                label = tagLabel,
+                                                tint = PriorityLowColor,
+                                                onClick = { tagMenuOpen = true }
                                             )
+                                            DropdownMenu(expanded = tagMenuOpen, onDismissRequest = { tagMenuOpen = false }) {
+                                                uiState.data.tags.forEach { tag ->
+                                                    val selected = quickTagIds.contains(tag.id)
+                                                    DropdownMenuItem(
+                                                        text = { Text("#${tag.name}") },
+                                                        trailingIcon = {
+                                                            if (selected) Icon(Icons.Default.Check, null, tint = CoralPrimary)
+                                                        },
+                                                        onClick = {
+                                                            quickTagIds = if (selected) {
+                                                                quickTagIds - tag.id
+                                                            } else {
+                                                                quickTagIds + tag.id
+                                                            }
+                                                        }
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-                    }
-                }
-            }
-
-            // Empty State
-            if (activeTasks.isEmpty() && completedTasks.isEmpty()) {
-                item {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 24.dp)
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircleOutline,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                                modifier = Modifier.size(54.dp)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = s.emptyTasksTitle,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = s.emptyTasksSubtitle,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
                     }
                 }
@@ -886,6 +669,7 @@ fun MainTaskWorkspace(
                     isSelectedForInspect = uiState.selectedTaskId == task.id,
                     isActiveFocusTask = uiState.timer.activeTaskId == task.id && uiState.timer.isRunning,
                     isArabic = isArabic,
+                    isDark = isDark,
                     s = s,
                     onToggleComplete = { onToggleTaskCompleted(task.id) },
                     onClickInspect = { onInspectTask(task.id) },
@@ -893,57 +677,97 @@ fun MainTaskWorkspace(
                 )
             }
 
-            // Completed Tasks Accordion
-            if (completedTasks.isNotEmpty() && uiState.showCompletedAccordion) {
+            // Empty State when no tasks at all
+            if (activeTasks.isEmpty() && completedTasks.isEmpty()) {
                 item {
-                    var expanded by remember { mutableStateOf(true) }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircleOutline,
+                            contentDescription = null,
+                            tint = secondaryTextColor.copy(alpha = 0.45f),
+                            modifier = Modifier.size(44.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = s.emptyTasksTitle,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = secondaryTextColor
+                        )
+                    }
+                }
+            }
+
+            // Centered pill button below tasks: "عرض المهام المكتملة ▾" inside #25252B capsule (11sp #A0A0AB)
+            if (completedTasks.isNotEmpty() || uiState.destination != NavDestination.SmartList(SmartListType.COMPLETED)) {
+                item {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                    ) {
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            shape = RoundedCornerShape(50),
+                            color = pillSurfaceColor,
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { expanded = !expanded }
+                                .clip(RoundedCornerShape(50))
+                                .clickable { onToggleShowCompleted() }
+                                .testTag("completed_tasks_pill_button")
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                             ) {
                                 Text(
-                                    text = "${s.completedTasks} (${completedTasks.size})",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f)
+                                    text = if (uiState.showCompletedAccordion && completedTasks.isNotEmpty()) {
+                                        s.hideCompleted
+                                    } else {
+                                        s.showCompleted
+                                    },
+                                    fontSize = 11.sp,
+                                    color = if (isDark) DarkPillText else secondaryTextColor,
+                                    fontWeight = FontWeight.Medium
                                 )
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Icon(
-                                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    imageVector = if (uiState.showCompletedAccordion && completedTasks.isNotEmpty()) {
+                                        Icons.Default.ArrowDropUp
+                                    } else {
+                                        Icons.Default.ArrowDropDown
+                                    },
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = if (isDark) DarkPillText else secondaryTextColor,
+                                    modifier = Modifier.size(16.dp)
                                 )
-                            }
-                        }
-
-                        AnimatedVisibility(visible = expanded) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                completedTasks.forEach { task ->
-                                    TaskRowCard(
-                                        task = task,
-                                        project = uiState.data.projects.find { it.id == task.projectId },
-                                        tags = uiState.data.tags.filter { task.tagIds.contains(it.id) },
-                                        isSelectedForInspect = uiState.selectedTaskId == task.id,
-                                        isActiveFocusTask = false,
-                                        isArabic = isArabic,
-                                        s = s,
-                                        onToggleComplete = { onToggleTaskCompleted(task.id) },
-                                        onClickInspect = { onInspectTask(task.id) },
-                                        onClickPlay = { onStartFocusForTask(task.id) }
-                                    )
-                                }
                             }
                         }
                     }
+                }
+            }
+
+            // Completed Tasks List when toggled visible
+            if (completedTasks.isNotEmpty() && uiState.showCompletedAccordion) {
+                items(completedTasks, key = { "done_${it.id}" }) { task ->
+                    TaskRowCard(
+                        task = task,
+                        project = uiState.data.projects.find { it.id == task.projectId },
+                        tags = uiState.data.tags.filter { task.tagIds.contains(it.id) },
+                        isSelectedForInspect = uiState.selectedTaskId == task.id,
+                        isActiveFocusTask = false,
+                        isArabic = isArabic,
+                        isDark = isDark,
+                        s = s,
+                        onToggleComplete = { onToggleTaskCompleted(task.id) },
+                        onClickInspect = { onInspectTask(task.id) },
+                        onClickPlay = { onStartFocusForTask(task.id) }
+                    )
                 }
             }
         }
@@ -966,40 +790,34 @@ fun MainTaskWorkspace(
 }
 
 @Composable
-private fun SummaryMetricCard(
-    label: String,
+private fun SummaryMetricColumn(
     value: String,
-    accent: Color,
+    label: String,
+    secondaryColor: Color,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        modifier = modifier
+    Column(
+        modifier = modifier.padding(horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.Start
-        ) {
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleMedium,
-                fontFamily = JetBrainsMonoFontFamily,
-                fontWeight = FontWeight.Bold,
-                color = accent,
-                maxLines = 1
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+        Text(
+            text = value,
+            fontSize = 20.sp,
+            fontFamily = JetBrainsMonoFontFamily,
+            fontWeight = FontWeight.Bold,
+            color = CoralPrimary,
+            maxLines = 1,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = secondaryColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -1012,7 +830,7 @@ private fun QuickSelectorPill(
 ) {
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = tint.copy(alpha = 0.12f),
+        color = tint.copy(alpha = 0.14f),
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
@@ -1025,7 +843,7 @@ private fun QuickSelectorPill(
             Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelSmall,
+                fontSize = 11.sp,
                 color = tint,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1
@@ -1043,46 +861,53 @@ fun TaskRowCard(
     isSelectedForInspect: Boolean,
     isActiveFocusTask: Boolean,
     isArabic: Boolean,
+    isDark: Boolean = true,
     s: Strings,
     onToggleComplete: () -> Unit,
     onClickInspect: () -> Unit,
     onClickPlay: () -> Unit
 ) {
-    val priorityColor = task.priority.color()
-    val borderColor by animateColorAsState(
+    val cardBg = if (isDark) DarkSurface else MaterialTheme.colorScheme.surface
+    val cardBorder by animateColorAsState(
         targetValue = when {
-            isActiveFocusTask -> MaterialTheme.colorScheme.primary
-            isSelectedForInspect -> MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+            isActiveFocusTask -> CoralPrimary
+            isSelectedForInspect -> CoralPrimary.copy(alpha = 0.75f)
+            isDark -> DarkOutline
             else -> MaterialTheme.colorScheme.outline
         },
         label = "taskBorder"
     )
+    val checkboxOutlineColor = if (task.priority != TaskPriority.NONE) {
+        task.priority.color()
+    } else {
+        if (isDark) DarkTextSecondary else MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val primaryText = if (isDark) DarkTextPrimary else MaterialTheme.colorScheme.onSurface
+    val secondaryText = if (isDark) DarkTextSecondary else MaterialTheme.colorScheme.onSurfaceVariant
 
+    // Task Cards (#1C1C21, 12dp radius): Right circular checkbox (22dp outline #7E7E8A),
+    // white title #F2F2F5, subtitle row with tiny tomato Pomodoro icons + orange due-date badge (#F39C12),
+    // and far-left circular Coral Red play button (28dp, #E05246 with translucent outer ring and white ▶).
     Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = if (task.isCompleted) {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
-        } else {
-            MaterialTheme.colorScheme.surface
-        },
-        border = BorderStroke(if (isSelectedForInspect || isActiveFocusTask) 1.5.dp else 1.dp, borderColor),
-        tonalElevation = if (isSelectedForInspect) 3.dp else 1.dp,
+        shape = RoundedCornerShape(12.dp),
+        color = if (task.isCompleted) cardBg.copy(alpha = 0.68f) else cardBg,
+        border = BorderStroke(1.dp, cardBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClickInspect)
             .testTag("task_item_card_${task.id}")
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 11.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Smooth Circular Checkbox (48dp touch area)
+            // Right circular checkbox (22dp outline #7E7E8A, inside 40dp touch target)
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
                     .clickable(onClick = onToggleComplete)
                     .testTag("task_checkbox_${task.id}"),
@@ -1093,10 +918,10 @@ fun TaskRowCard(
                         .size(22.dp)
                         .clip(CircleShape)
                         .background(
-                            if (task.isCompleted) priorityColor.copy(alpha = 0.85f)
+                            if (task.isCompleted) checkboxOutlineColor.copy(alpha = 0.85f)
                             else Color.Transparent
                         )
-                        .border(2.dp, priorityColor, CircleShape),
+                        .border(1.6.dp, checkboxOutlineColor, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     if (task.isCompleted) {
@@ -1104,7 +929,7 @@ fun TaskRowCard(
                             imageVector = Icons.Default.Check,
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(13.dp)
                         )
                     }
                 }
@@ -1115,33 +940,25 @@ fun TaskRowCard(
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    if (task.priority != TaskPriority.NONE) {
-                        Icon(
-                            imageVector = Icons.Default.Flag,
-                            contentDescription = task.priority.label(s),
-                            tint = priorityColor,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
                     Text(
                         text = task.title,
-                        style = MaterialTheme.typography.bodyLarge,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Medium,
                         textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
-                        color = if (task.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                        color = if (task.isCompleted) secondaryText else primaryText,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
                 }
 
-                // Metadata & Tags Row
+                // Subtitle row with tiny tomato Pomodoro icons + orange due-date badge (#F39C12)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -1155,57 +972,28 @@ fun TaskRowCard(
                         for (i in 1..totalIcons) {
                             TomatoIcon(
                                 filled = i <= task.completedPomodoros,
-                                size = 13.dp
+                                size = 12.dp,
+                                tint = CoralPrimary
                             )
                         }
                         if (task.estimatedPomodoros > 6) {
                             Text(
                                 text = "+${task.estimatedPomodoros - 6}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
+                                fontSize = 11.sp,
+                                color = CoralPrimary
                             )
                         }
                         if (task.elapsedFocusMinutes > 0) {
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(3.dp))
                             Text(
                                 text = formatDuration(task.elapsedFocusMinutes, s),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontSize = 11.sp,
+                                color = secondaryText
                             )
                         }
                     }
 
-                    // Subtasks count
-                    if (task.subtasks.isNotEmpty()) {
-                        val done = task.subtasks.count { it.isDone }
-                        Text(
-                            text = "☑ $done/${task.subtasks.size}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    // Note indicator
-                    if (task.notes.isNotBlank()) {
-                        Icon(
-                            imageVector = Icons.Default.Description,
-                            contentDescription = s.notes,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(13.dp)
-                        )
-                    }
-
-                    // Recurring indicator
-                    if (task.recurrence != RecurrenceRule.NONE) {
-                        Icon(
-                            imageVector = Icons.Default.Repeat,
-                            contentDescription = s.repeat,
-                            tint = ForestEmerald,
-                            modifier = Modifier.size(13.dp)
-                        )
-                    }
-
-                    // Due Date & Exact Reminder Time (HH:mm) Badge
+                    // Due Date & Exact Reminder Time Badge in Orange (#F39C12)
                     if (task.dueDateEpochDay != null || !task.reminderTime.isNullOrBlank()) {
                         val isOverdue = !task.isCompleted &&
                             task.dueDateEpochDay != null &&
@@ -1217,35 +1005,55 @@ fun TaskRowCard(
                             datePart != null -> datePart
                             else -> timePart ?: ""
                         }
-                        val badgeColor = when {
-                            isOverdue -> MaterialTheme.colorScheme.error
-                            timePart != null -> MaterialTheme.colorScheme.primary
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                        Surface(
-                            shape = CircleShape,
-                            color = badgeColor.copy(alpha = 0.14f)
+                        val badgeColor = if (isOverdue) CoralPrimary else CatTomorrowOrange
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CalendarToday,
-                                    contentDescription = null,
-                                    tint = badgeColor,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Text(
-                                    text = badgeLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = JetBrainsMonoFontFamily,
-                                    color = badgeColor,
-                                    fontWeight = if (isOverdue || timePart != null) FontWeight.Bold else FontWeight.Medium
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Default.CalendarToday,
+                                contentDescription = null,
+                                tint = badgeColor,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text(
+                                text = badgeLabel,
+                                fontSize = 11.sp,
+                                color = badgeColor,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
+                    }
+
+                    // Subtasks count
+                    if (task.subtasks.isNotEmpty()) {
+                        val done = task.subtasks.count { it.isDone }
+                        Text(
+                            text = "☑ $done/${task.subtasks.size}",
+                            fontSize = 11.sp,
+                            color = secondaryText
+                        )
+                    }
+
+                    // Note indicator
+                    if (task.notes.isNotBlank()) {
+                        Icon(
+                            imageVector = Icons.Default.Description,
+                            contentDescription = s.notes,
+                            tint = secondaryText,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+
+                    // Recurring indicator
+                    if (task.recurrence != RecurrenceRule.NONE) {
+                        Icon(
+                            imageVector = Icons.Default.Repeat,
+                            contentDescription = s.repeat,
+                            tint = ForestEmerald,
+                            modifier = Modifier.size(12.dp)
+                        )
                     }
 
                     // Project Pill
@@ -1257,13 +1065,13 @@ fun TaskRowCard(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(7.dp)
+                                    .size(6.dp)
                                     .clip(CircleShape)
                                     .background(pColor)
                             )
                             Text(
                                 text = project.name,
-                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 11.sp,
                                 color = pColor,
                                 maxLines = 1
                             )
@@ -1273,39 +1081,46 @@ fun TaskRowCard(
                     // Tag Badges
                     tags.forEach { tag ->
                         val tColor = parseHexColor(tag.colorHex)
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = tColor.copy(alpha = 0.14f)
-                        ) {
-                            Text(
-                                text = "#${tag.name}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = tColor,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                            )
-                        }
+                        Text(
+                            text = "#${tag.name}",
+                            fontSize = 11.sp,
+                            color = tColor
+                        )
                     }
                 }
             }
 
-            // Direct Play Button (Start Pomodoro for this task)
+            // Far-left circular Coral Red play button (28dp, #E05246 with translucent outer ring and white ▶)
             if (!task.isCompleted) {
-                Surface(
-                    shape = CircleShape,
-                    color = if (isActiveFocusTask) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(42.dp)
+                        .size(40.dp)
                         .clip(CircleShape)
                         .clickable(onClick = onClickPlay)
                         .testTag("play_task_button_${task.id}")
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = s.start,
-                            tint = if (isActiveFocusTask) Color.White else MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(CoralPrimary.copy(alpha = 0.22f))
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(26.dp)
+                                .clip(CircleShape)
+                                .background(CoralPrimary)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = s.start,
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
             }

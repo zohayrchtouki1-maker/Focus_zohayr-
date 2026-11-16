@@ -10,15 +10,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 private val FocusDarkColorScheme = darkColorScheme(
-    primary = RoyalBlueDarkTheme,
+    primary = CoralPrimary,
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = CoralContainerDark,
-    onPrimaryContainer = Color(0xFFE3E3E3),
-    secondary = RoyalBlueAccentDark,
+    onPrimaryContainer = DarkTextPrimary,
+    secondary = RoyalBlueChart,
     onSecondary = Color(0xFFFFFFFF),
     secondaryContainer = DarkSurfaceVariant,
-    onSecondaryContainer = DarkCancelButtonText,
-    tertiary = RoyalBlueDarkTheme,
+    onSecondaryContainer = DarkTextPrimary,
+    tertiary = RoyalBlueChart,
     onTertiary = Color(0xFFFFFFFF),
     background = DarkBackground,
     onBackground = DarkTextPrimary,
@@ -32,15 +32,15 @@ private val FocusDarkColorScheme = darkColorScheme(
 )
 
 private val FocusLightColorScheme = lightColorScheme(
-    primary = RoyalBlueLightTheme,
+    primary = CoralPrimary,
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = CoralContainerLight,
-    onPrimaryContainer = Color(0xFF174EA6),
-    secondary = RoyalBlueLightTheme,
+    onPrimaryContainer = CoralDark,
+    secondary = RoyalBlueChart,
     onSecondary = Color(0xFFFFFFFF),
     secondaryContainer = LightSurfaceVariant,
     onSecondaryContainer = LightTextPrimary,
-    tertiary = RoyalBlueLightTheme,
+    tertiary = RoyalBlueChart,
     onTertiary = Color(0xFFFFFFFF),
     background = LightBackground,
     onBackground = LightTextPrimary,
@@ -54,16 +54,16 @@ private val FocusLightColorScheme = lightColorScheme(
 )
 
 val FocusShapes = Shapes(
-    extraSmall = RoundedCornerShape(10.dp),
-    small = RoundedCornerShape(14.dp),
-    medium = RoundedCornerShape(20.dp),
-    large = RoundedCornerShape(20.dp),
-    extraLarge = RoundedCornerShape(28.dp)
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(14.dp),
+    extraLarge = RoundedCornerShape(20.dp)
 )
 
 @Composable
 fun FocusTodoTheme(
-    darkTheme: Boolean = false,
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) FocusDarkColorScheme else FocusLightColorScheme

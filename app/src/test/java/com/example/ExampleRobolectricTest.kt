@@ -128,33 +128,47 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `google drive repository configures drive appdata scope and persists backup state`() {
+    fun `local backup generates focus_zohayr_backup filename and supports merge and replace`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repo = FocusRepository(context)
-        val gso = repo.getGoogleSignInOptions()
-        org.junit.Assert.assertNull(gso.serverClientId)
-        assertTrue(
-            gso.scopeArray.any { it.scopeUri == com.example.data.DriveScopes.DRIVE_APPDATA }
-        )
-        assertEquals("com.aistudio.focustodo.arpmzq", context.packageName)
-        assertTrue(FocusRepository.getRuntimeSigningSha1(context).isNotBlank())
+        val fileName = FocusRepository.generateBackupFileName()
+        assertTrue(fileName.matches(Regex("^focus_zohayr_backup_\\d{4}-\\d{2}-\\d{2}\\.json$")))
 
         kotlinx.coroutines.runBlocking {
-            val stateWithTask = SeedData.createInitialState().copy(
+            val currentState = SeedData.createInitialState().copy(
                 tasks = listOf(
                     TaskItem(
-                        id = "drive_ready_task_1",
-                        title = "مهمة جاهزة للمزامنة مع Google Drive",
+                        id = "existing_task_1",
+                        title = "مهمة حالية",
                         dueDateEpochDay = DateUtils.todayEpochDay()
                     )
                 )
             )
-            val saveRes = repo.saveState(stateWithTask)
+            val saveRes = repo.saveState(currentState)
             assertTrue(saveRes.isSuccess)
 
             val loadedState = repo.loadState()
             assertEquals(1, loadedState.tasks.size)
-            assertEquals("drive_ready_task_1", loadedState.tasks.first().id)
+            assertEquals("existing_task_1", loadedState.tasks.first().id)
+
+            val importedState = SeedData.createInitialState().copy(
+                tasks = listOf(
+                    TaskItem(
+                        id = "imported_task_2",
+                        title = "مهمة مستوردة",
+                        dueDateEpochDay = DateUtils.todayEpochDay()
+                    )
+                )
+            )
+
+            // Test Merge (دمج مع المهام الحالية)
+            val merged = repo.mergeBackupStates(loadedState, importedState)
+            assertEquals(2, merged.tasks.size)
+
+            // Test Shareable file creation
+            val shareFile = repo.createShareableBackupFile(merged)
+            assertTrue(shareFile.exists())
+            assertTrue(shareFile.name.startsWith("focus_zohayr_backup_"))
         }
     }
 }

@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -63,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -76,7 +79,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.i18n.Strings
 import com.example.i18n.label
-import com.example.model.TaskItem
 import com.example.model.TimerCountMode
 import com.example.model.TimerPhase
 import com.example.model.WhiteNoiseType
@@ -110,109 +112,129 @@ fun FloatingMiniTimerBar(
     modifier: Modifier = Modifier
 ) {
     val timer = uiState.timer
-    val activeTask = uiState.data.tasks.find { it.id == timer.activeTaskId }
     val displaySecs = if (timer.countMode == TimerCountMode.STOPWATCH && timer.phase == TimerPhase.FOCUS) {
         timer.stopwatchSeconds
     } else {
         timer.remainingSeconds
     }
-    val accent = when (timer.phase) {
-        TimerPhase.FOCUS -> MaterialTheme.colorScheme.primary
-        TimerPhase.SHORT_BREAK -> ShortBreakColor
-        TimerPhase.LONG_BREAK -> LongBreakColor
+    val displayMinutesNumber = ((displaySecs + 59) / 60).coerceAtLeast(0)
+    val circleDisplayText = if (timer.isRunning || timer.hasStarted) {
+        formatSecondsMmSs(displaySecs)
+    } else {
+        displayMinutesNumber.toString()
     }
 
+    val rimColor = when {
+        timer.isRunning && timer.phase == TimerPhase.FOCUS -> CoralPrimary
+        timer.isRunning && timer.phase == TimerPhase.SHORT_BREAK -> ShortBreakColor
+        timer.isRunning && timer.phase == TimerPhase.LONG_BREAK -> LongBreakColor
+        else -> Color(0xFF4B5568)
+    }
+
+    // Bottom center: Floating circular Pomodoro timer widget (56dp) with dark night-sky gradient,
+    // subtle rim glow, and crisp white countdown number (tapping opens full-screen timer).
     Box(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .padding(bottom = 14.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 8.dp,
-            shadowElevation = 10.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        Box(
+            contentAlignment = Alignment.Center,
             modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
-                .clickable(onClick = onExpand)
-                .testTag("mini_timer_bar")
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(accent.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (timer.phase == TimerPhase.FOCUS) {
-                        TomatoIcon(filled = true, size = 20.dp, tint = accent)
-                    } else {
-                        Icon(Icons.Default.Timer, null, tint = accent, modifier = Modifier.size(20.dp))
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = activeTask?.title ?: s.freeFocus,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                .size(62.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            rimColor.copy(alpha = 0.32f),
+                            Color.Transparent
+                        )
                     )
-                    Text(
-                        text = timer.phase.label(s) + if (uiState.data.settings.whiteNoise != WhiteNoiseType.NONE && timer.isRunning) {
-                            " • ${uiState.data.settings.whiteNoise.label(s)}"
-                        } else "",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
+                )
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(56.dp)
+                    .shadow(elevation = 10.dp, shape = CircleShape)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xFF23273A),
+                                Color(0xFF141622),
+                                Color(0xFF0D0E15)
+                            )
+                        )
+                    )
+                    .border(
+                        width = 1.8.dp,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.55f),
+                                rimColor.copy(alpha = 0.85f),
+                                Color(0xFF2A2E42)
+                            )
+                        ),
+                        shape = CircleShape
+                    )
+                    .clickable(onClick = onExpand)
+                    .testTag("mini_timer_bar")
+            ) {
+                // Subtle night-sky stars/dots inside the circle
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.25f),
+                        radius = 1.2.dp.toPx(),
+                        center = Offset(size.width * 0.28f, size.height * 0.26f)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.18f),
+                        radius = 1.dp.toPx(),
+                        center = Offset(size.width * 0.74f, size.height * 0.30f)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.15f),
+                        radius = 1.dp.toPx(),
+                        center = Offset(size.width * 0.24f, size.height * 0.70f)
                     )
                 }
 
                 Text(
-                    text = formatSecondsMmSs(displaySecs),
-                    style = MaterialTheme.typography.titleLarge,
+                    text = circleDisplayText,
                     fontFamily = JetBrainsMonoFontFamily,
                     fontWeight = FontWeight.Bold,
-                    color = accent,
-                    modifier = Modifier.padding(horizontal = 10.dp)
+                    fontSize = if (circleDisplayText.length > 2) 13.sp else 19.sp,
+                    color = Color.White,
+                    maxLines = 1
                 )
+            }
 
-                val pauseBlocked = timer.strictMode && timer.phase == TimerPhase.FOCUS && timer.isRunning
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary,
+            // Hidden/subtle quick play-pause action badge for accessibility & testTag("mini_timer_play_pause")
+            val pauseBlocked = timer.strictMode && timer.phase == TimerPhase.FOCUS && timer.isRunning
+            if (timer.isRunning) {
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(44.dp)
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 2.dp, y = 2.dp)
+                        .size(20.dp)
                         .clip(CircleShape)
+                        .background(CoralPrimary)
+                        .border(1.dp, Color(0xFF121215), CircleShape)
                         .clickable(enabled = !pauseBlocked) {
-                            if (timer.isRunning) onPause() else onStartOrResume()
+                            onPause()
                         }
                         .testTag("mini_timer_play_pause")
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = when {
-                                pauseBlocked -> Icons.Default.Lock
-                                timer.isRunning -> Icons.Default.Pause
-                                else -> Icons.Default.PlayArrow
-                            },
-                            contentDescription = if (timer.isRunning) s.pause else s.start,
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = if (pauseBlocked) Icons.Default.Lock else Icons.Default.Pause,
+                        contentDescription = s.pause,
+                        tint = Color.White,
+                        modifier = Modifier.size(11.dp)
+                    )
                 }
             }
         }
@@ -273,9 +295,9 @@ fun FullScreenTimerOverlay(
         label = "gradBottom"
     )
     val ringAccent = when (timer.phase) {
-        TimerPhase.FOCUS -> Color(0xFF4A6EE0)
-        TimerPhase.SHORT_BREAK -> Color(0xFF3B5998)
-        TimerPhase.LONG_BREAK -> Color(0xFF6384F2)
+        TimerPhase.FOCUS -> CoralPrimary
+        TimerPhase.SHORT_BREAK -> ShortBreakColor
+        TimerPhase.LONG_BREAK -> LongBreakColor
     }
 
     val isStopwatch = timer.countMode == TimerCountMode.STOPWATCH && timer.phase == TimerPhase.FOCUS
@@ -328,8 +350,8 @@ fun FullScreenTimerOverlay(
                 // Task Switcher Pill
                 Surface(
                     shape = RoundedCornerShape(24.dp),
-                    color = Color.White.copy(alpha = 0.14f),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)),
+                    color = Color(0xFF1C1C21),
+                    border = BorderStroke(1.dp, Color(0xFF26262C)),
                     modifier = Modifier
                         .clip(RoundedCornerShape(24.dp))
                         .clickable { showTaskPicker = true }
@@ -389,7 +411,7 @@ fun FullScreenTimerOverlay(
             ) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = Color.White.copy(alpha = 0.15f)
+                    color = Color(0xFF25252B)
                 ) {
                     Text(
                         text = timer.phase.label(s),
@@ -401,7 +423,7 @@ fun FullScreenTimerOverlay(
                 if (timer.strictMode) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFFF59E0B).copy(alpha = 0.28f)
+                        color = Color(0xFFF39C12).copy(alpha = 0.25f)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -427,13 +449,13 @@ fun FullScreenTimerOverlay(
                 modifier = Modifier.size(270.dp)
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    val strokeWidth = 14.dp.toPx()
+                    val strokeWidth = 10.dp.toPx()
                     val diameter = size.minDimension - strokeWidth
                     val topLeft = Offset((size.width - diameter) / 2f, (size.height - diameter) / 2f)
 
                     // Track
                     drawArc(
-                        color = Color.White.copy(alpha = 0.14f),
+                        color = Color.White.copy(alpha = 0.12f),
                         startAngle = -90f,
                         sweepAngle = 360f,
                         useCenter = false,
@@ -465,7 +487,7 @@ fun FullScreenTimerOverlay(
                     Text(
                         text = if (isStopwatch) s.stopwatchMode else s.countdownMode,
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.7f)
+                        color = Color(0xFF7E7E8A)
                     )
                 }
             }
@@ -495,9 +517,11 @@ fun FullScreenTimerOverlay(
                     if (!(timer.strictMode && timer.phase == TimerPhase.FOCUS)) {
                         Button(
                             onClick = onPause,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2A2B2F), contentColor = Color(0xFFE2E2E6)),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25252B), contentColor = Color(0xFFF2F2F5)),
                             shape = CircleShape,
-                            modifier = Modifier.height(52.dp).testTag("timer_pause_button")
+                            modifier = Modifier
+                                .height(52.dp)
+                                .testTag("timer_pause_button")
                         ) {
                             Icon(Icons.Default.Pause, null)
                             Spacer(modifier = Modifier.width(6.dp))
@@ -513,13 +537,15 @@ fun FullScreenTimerOverlay(
                                 onStop()
                             }
                         },
-                        border = BorderStroke(1.5.dp, Color(0xFF2C2D30)),
+                        border = BorderStroke(1.dp, Color(0xFF26262C)),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = Color(0xFF2A2B2F),
-                            contentColor = Color(0xFFE2E2E6)
+                            containerColor = Color(0xFF1C1C21),
+                            contentColor = Color(0xFFF2F2F5)
                         ),
                         shape = CircleShape,
-                        modifier = Modifier.height(52.dp).testTag("timer_stop_button")
+                        modifier = Modifier
+                            .height(52.dp)
+                            .testTag("timer_stop_button")
                     ) {
                         Icon(Icons.Default.Stop, null)
                         Spacer(modifier = Modifier.width(6.dp))
@@ -531,7 +557,9 @@ fun FullScreenTimerOverlay(
                         onClick = onStartOrResume,
                         colors = ButtonDefaults.buttonColors(containerColor = ringAccent, contentColor = Color.White),
                         shape = CircleShape,
-                        modifier = Modifier.height(52.dp).testTag("timer_resume_button")
+                        modifier = Modifier
+                            .height(52.dp)
+                            .testTag("timer_resume_button")
                     ) {
                         Icon(Icons.Default.PlayArrow, null)
                         Spacer(modifier = Modifier.width(6.dp))
@@ -540,10 +568,10 @@ fun FullScreenTimerOverlay(
 
                     OutlinedButton(
                         onClick = onStop,
-                        border = BorderStroke(1.5.dp, Color(0xFF2C2D30)),
+                        border = BorderStroke(1.dp, Color(0xFF26262C)),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = Color(0xFF2A2B2F),
-                            contentColor = Color(0xFFE2E2E6)
+                            containerColor = Color(0xFF1C1C21),
+                            contentColor = Color(0xFFF2F2F5)
                         ),
                         shape = CircleShape,
                         modifier = Modifier.height(52.dp)
@@ -557,10 +585,10 @@ fun FullScreenTimerOverlay(
                 if (timer.phase != TimerPhase.FOCUS) {
                     OutlinedButton(
                         onClick = onSkipBreak,
-                        border = BorderStroke(1.5.dp, Color(0xFF2C2D30)),
+                        border = BorderStroke(1.dp, Color(0xFF26262C)),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = Color(0xFF2A2B2F),
-                            contentColor = Color(0xFFE2E2E6)
+                            containerColor = Color(0xFF1C1C21),
+                            contentColor = Color(0xFFF2F2F5)
                         ),
                         shape = CircleShape,
                         modifier = Modifier.height(52.dp)
@@ -576,8 +604,9 @@ fun FullScreenTimerOverlay(
 
             // Bottom Toolbar: Timer Mode, Strict Mode, White Noise Mixer
             Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color.Black.copy(alpha = 0.28f),
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF1C1C21),
+                border = BorderStroke(1.dp, Color(0xFF26262C)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -652,7 +681,7 @@ fun FullScreenTimerOverlay(
     if (showTaskPicker) {
         ModalBottomSheet(
             onDismissRequest = { showTaskPicker = false },
-            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
             containerColor = MaterialTheme.colorScheme.surface
         ) {
             Column(
@@ -668,12 +697,12 @@ fun FullScreenTimerOverlay(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (timer.activeTaskId == null) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (timer.activeTaskId == null) CoralPrimary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable {
                             onSelectTask(null)
                             showTaskPicker = false
@@ -684,7 +713,7 @@ fun FullScreenTimerOverlay(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(s.freeFocus, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                        if (timer.activeTaskId == null) Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+                        if (timer.activeTaskId == null) Icon(Icons.Default.Check, null, tint = CoralPrimary)
                     }
                 }
 
@@ -698,12 +727,12 @@ fun FullScreenTimerOverlay(
                     items(incompleteTasks, key = { it.id }) { t ->
                         val selected = timer.activeTaskId == t.id
                         Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selected) CoralPrimary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(20.dp))
+                                .clip(RoundedCornerShape(12.dp))
                                 .clickable {
                                     onSelectTask(t.id)
                                     showTaskPicker = false
@@ -713,7 +742,7 @@ fun FullScreenTimerOverlay(
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                TomatoIcon(filled = true, size = 16.dp)
+                                TomatoIcon(filled = true, size = 16.dp, tint = CoralPrimary)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = t.title,
@@ -740,7 +769,7 @@ fun FullScreenTimerOverlay(
     if (showNoiseMixer) {
         ModalBottomSheet(
             onDismissRequest = { showNoiseMixer = false },
-            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
             containerColor = MaterialTheme.colorScheme.surface
         ) {
             Column(
@@ -789,7 +818,7 @@ fun FullScreenTimerOverlay(
                                 val selected = settings.whiteNoise == noise
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = if (selected) CoralPrimary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    color = if (selected) CoralPrimary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
                                     border = if (selected) BorderStroke(1.5.dp, CoralPrimary) else null,
                                     modifier = Modifier
                                         .weight(1f)
@@ -837,14 +866,14 @@ private fun TimerToolbarItem(
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = if (active) Color.White else Color.White.copy(alpha = 0.65f),
+            tint = if (active) CoralPrimary else Color(0xFF9E9EA9),
             modifier = Modifier.size(22.dp)
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (active) Color.White else Color.White.copy(alpha = 0.65f),
+            color = if (active) Color(0xFFF2F2F5) else Color(0xFF7E7E8A),
             maxLines = 1
         )
     }

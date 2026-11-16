@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,35 +23,30 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.automirrored.filled.Login
-import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AllInclusive
 import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.CloudQueue
-import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material.icons.filled.CreateNewFolder
-import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Park
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Tag
-import androidx.compose.material.icons.filled.Today
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Unarchive
-import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.DateRange
+import androidx.compose.material.icons.outlined.EventAvailable
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.LocalOffer
+import androidx.compose.material.icons.outlined.Park
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.WbSunny
+import androidx.compose.material.icons.outlined.WbTwilight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -76,23 +72,39 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.data.CloudSyncStatus
+import androidx.compose.ui.unit.sp
 import com.example.i18n.Strings
-import com.example.i18n.formatDuration
 import com.example.i18n.label
 import com.example.model.AppLanguage
 import com.example.model.FolderItem
 import com.example.model.ProjectItem
 import com.example.model.SmartListType
-import com.example.model.TagItem
+import com.example.ui.theme.CatCalendarTeal
+import com.example.ui.theme.CatCompletedGray
+import com.example.ui.theme.CatPlannedBlue
+import com.example.ui.theme.CatTasksInboxBlue
+import com.example.ui.theme.CatTodayGreen
+import com.example.ui.theme.CatTomorrowOrange
+import com.example.ui.theme.CatWeekPurple
 import com.example.ui.theme.CoralPrimary
+import com.example.ui.theme.DarkIconMuted
+import com.example.ui.theme.DarkTextPrimary
+import com.example.ui.theme.DarkTextSecondary
 import com.example.ui.theme.ForestEmerald
-import com.example.ui.theme.PriorityLowColor
 import com.example.ui.theme.PriorityMediumColor
 import com.example.ui.theme.ProjectColorPalette
-import com.example.ui.theme.SunlightGold
 import com.example.viewmodel.MainUiState
 import com.example.viewmodel.NavDestination
+
+private val HomeSmartListOrder = listOf(
+    SmartListType.TODAY,
+    SmartListType.TOMORROW,
+    SmartListType.UPCOMING,
+    SmartListType.SOMEDAY,
+    SmartListType.EVENTS,
+    SmartListType.COMPLETED,
+    SmartListType.INBOX
+)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -103,7 +115,6 @@ fun SidebarPanel(
     onOpenReports: () -> Unit,
     onOpenForest: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenAuth: () -> Unit = {},
     onAddFolder: (String) -> Unit,
     onRenameFolder: (String, String) -> Unit,
     onDeleteFolder: (String) -> Unit,
@@ -113,6 +124,7 @@ fun SidebarPanel(
     onDeleteProject: (String) -> Unit,
     onAddTag: (String, String) -> Unit,
     onDeleteTag: (String) -> Unit,
+    onOpenCalendar: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showAddFolderDialog by remember { mutableStateOf(false) }
@@ -125,200 +137,123 @@ fun SidebarPanel(
     val scrollState = rememberScrollState()
     val data = uiState.data
     val isArabic = data.settings.language == AppLanguage.AR
+    val primaryTextColor = if (data.settings.darkTheme) DarkTextPrimary else MaterialTheme.colorScheme.onBackground
+    val secondaryTextColor = if (data.settings.darkTheme) DarkTextSecondary else MaterialTheme.colorScheme.onSurfaceVariant
+    val topIconTint = if (data.settings.darkTheme) DarkIconMuted else MaterialTheme.colorScheme.onSurfaceVariant
 
     Column(
         modifier = modifier
             .fillMaxHeight()
-            .background(MaterialTheme.colorScheme.surface)
+            .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
             .verticalScroll(scrollState)
-            .padding(horizontal = 12.dp, vertical = 14.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
-        // Profile / Cloud Sync Header
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            shape = RoundedCornerShape(20.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = Modifier.fillMaxWidth()
+        // Top Bar (RTL):
+        // Right side (Start in RTL): circular avatar (40dp) with small emerald status dot next to "النسخ الاحتياطي المحلي مفعل"
+        // Left side (End in RTL): minimal monochrome outline icons (22dp, #9E9EA9) for Statistics, Forest, and Settings
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { onOpenAuth() }
-                        .padding(vertical = 2.dp)
-                        .testTag("sidebar_account_row")
-                ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onOpenSettings)
+                    .padding(vertical = 4.dp)
+            ) {
+                Box(contentAlignment = Alignment.BottomEnd) {
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (uiState.currentUserEmail != null) {
-                            Icon(
-                                imageVector = Icons.Default.AccountCircle,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        } else {
-                            TomatoIcon(filled = true, size = 22.dp, tint = Color.White)
-                        }
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = uiState.currentUserEmail ?: s.appTitle,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        val (syncIcon, syncTint, syncLabel) = when (uiState.cloudSyncStatus) {
-                            CloudSyncStatus.SYNCED -> Triple(
-                                Icons.Default.CloudDone,
-                                ForestEmerald,
-                                "Synced (Google Drive)"
-                            )
-                            CloudSyncStatus.SYNCING -> Triple(
-                                Icons.Default.CloudSync,
-                                MaterialTheme.colorScheme.primary,
-                                "Syncing..."
-                            )
-                            CloudSyncStatus.SYNC_FAILED -> Triple(
-                                Icons.Default.CloudOff,
-                                Color(0xFFEF4444),
-                                "Sync Failed: ${uiState.cloudSyncErrorMessage ?: "Unknown error"}"
-                            )
-                            CloudSyncStatus.UNAUTHENTICATED -> Triple(
-                                Icons.Default.CloudQueue,
-                                MaterialTheme.colorScheme.onSurfaceVariant,
-                                if (isArabic) "سجل الدخول بحساب Google للمزامنة" else "Sign in with Google to Sync"
-                            )
-                        }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = syncIcon,
-                                contentDescription = null,
-                                tint = syncTint,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Text(
-                                text = syncLabel,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = syncTint,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Sign In / Account Pill Button
-                Surface(
-                    shape = CircleShape,
-                    color = if (uiState.currentUserEmail != null) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(CircleShape)
-                        .clickable { onOpenAuth() }
-                        .testTag("sidebar_auth_button")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
                         Icon(
-                            imageVector = if (uiState.currentUserEmail != null) {
-                                Icons.Default.AccountCircle
-                            } else {
-                                Icons.AutoMirrored.Filled.Login
-                            },
+                            imageVector = Icons.Default.Person,
                             contentDescription = null,
-                            tint = if (uiState.currentUserEmail != null) {
-                                MaterialTheme.colorScheme.onSecondaryContainer
-                            } else {
-                                Color.White
-                            },
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (uiState.currentUserEmail != null) {
-                                if (isArabic) "حسابي والمزامنة / تسجيل الخروج" else "Account & Cloud Sync / Log Out"
-                            } else {
-                                if (isArabic) "تسجيل الدخول / إنشاء حساب" else "Sign In / Create Account"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (uiState.currentUserEmail != null) {
-                                MaterialTheme.colorScheme.onSecondaryContainer
-                            } else {
-                                Color.White
-                            }
+                            tint = topIconTint,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
+                    Box(
+                        modifier = Modifier
+                            .size(11.dp)
+                            .clip(CircleShape)
+                            .background(ForestEmerald)
+                            .border(1.5.dp, MaterialTheme.colorScheme.background, CircleShape)
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Column {
+                    Text(
+                        text = if (isArabic) "النسخ الاحتياطي المحلي مفعل" else s.localSyncReady,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = primaryTextColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
 
-                // Top Bar Quick Buttons: Reports, Forest, Settings
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                IconButton(
+                    onClick = onOpenReports,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("nav_reports_button")
                 ) {
-                    SidebarTopActionChip(
-                        icon = Icons.Default.BarChart,
-                        label = s.reports,
-                        tint = PriorityLowColor,
-                        onClick = onOpenReports,
-                        modifier = Modifier.weight(1f).testTag("nav_reports_button")
+                    Icon(
+                        imageVector = Icons.Outlined.BarChart,
+                        contentDescription = s.reports,
+                        tint = topIconTint,
+                        modifier = Modifier.size(22.dp)
                     )
-                    SidebarTopActionChip(
-                        icon = Icons.Default.Park,
-                        label = s.forest,
-                        tint = ForestEmerald,
-                        onClick = onOpenForest,
-                        modifier = Modifier.weight(1f).testTag("nav_forest_button")
+                }
+                IconButton(
+                    onClick = onOpenForest,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("nav_forest_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Park,
+                        contentDescription = s.forest,
+                        tint = topIconTint,
+                        modifier = Modifier.size(22.dp)
                     )
-                    SidebarTopActionChip(
-                        icon = Icons.Default.Settings,
-                        label = s.settings,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        onClick = onOpenSettings,
-                        modifier = Modifier.weight(1f).testTag("nav_settings_button")
+                }
+                IconButton(
+                    onClick = onOpenSettings,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("nav_settings_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Settings,
+                        contentDescription = s.settings,
+                        tint = topIconTint,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // Smart Lists Section
-        Text(
-            text = s.smartLists,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-        )
-
-        SmartListType.entries.forEach { smartType ->
+        // Vertical Category List (14dp row padding)
+        HomeSmartListOrder.forEach { smartType ->
             val isSelected = uiState.destination == NavDestination.SmartList(smartType)
             val (count, estMins) = TaskFilterUtils.smartListSummary(
                 data.tasks,
@@ -326,64 +261,30 @@ fun SidebarPanel(
                 data.settings
             )
             val (icon, iconTint) = smartListVisual(smartType)
+            val formattedMetric = formatHomeRowSummary(estMins, count, isArabic)
 
             SidebarNavRow(
                 title = smartType.label(s),
                 icon = icon,
                 iconTint = iconTint,
-                count = count,
-                subtitleTime = if (estMins > 0 && smartType != SmartListType.COMPLETED) {
-                    formatDuration(estMins, s)
-                } else null,
+                summaryText = formattedMetric,
                 selected = isSelected,
-                onClick = { onSelectDestination(NavDestination.SmartList(smartType)) },
+                primaryTextColor = primaryTextColor,
+                secondaryTextColor = secondaryTextColor,
+                onClick = {
+                    if (smartType == SmartListType.EVENTS && onOpenCalendar != null) {
+                        onOpenCalendar()
+                    } else {
+                        onSelectDestination(NavDestination.SmartList(smartType))
+                    }
+                },
                 modifier = Modifier.testTag("smart_list_${smartType.name.lowercase()}")
             )
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Folders & Projects Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = s.foldersAndProjects,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(
-                onClick = { showAddFolderDialog = true },
-                modifier = Modifier.size(36.dp).testTag("add_folder_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.CreateNewFolder,
-                    contentDescription = s.newFolder,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            IconButton(
-                onClick = {
-                    editingProject = null
-                    showProjectDialog = true
-                },
-                modifier = Modifier.size(36.dp).testTag("add_project_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = s.newProject,
-                    modifier = Modifier.size(20.dp),
-                    tint = CoralPrimary
-                )
-            }
-        }
+        Spacer(modifier = Modifier.height(6.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline, thickness = 1.dp)
+        Spacer(modifier = Modifier.height(6.dp))
 
         // Folders with nested Projects
         data.folders.forEach { folder ->
@@ -395,30 +296,30 @@ fun SidebarPanel(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
                     .clickable { onToggleFolderExpanded(folder.id) }
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 6.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Icon(
+                    imageVector = Icons.Outlined.Folder,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = PriorityMediumColor
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = folder.name,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = primaryTextColor,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 Icon(
                     imageVector = if (folder.isExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Icon(
-                    imageVector = Icons.Default.Folder,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = PriorityMediumColor
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = folder.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    tint = secondaryTextColor
                 )
                 Box {
                     IconButton(
@@ -429,7 +330,7 @@ fun SidebarPanel(
                             imageVector = Icons.Default.MoreVert,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = secondaryTextColor
                         )
                     }
                     DropdownMenu(
@@ -459,11 +360,17 @@ fun SidebarPanel(
             if (folder.isExpanded) {
                 Column(modifier = Modifier.padding(start = 16.dp)) {
                     folderProjects.forEach { project ->
-                        val activeCount = data.tasks.count { it.projectId == project.id && !it.isCompleted }
+                        val activeTasksForProj = data.tasks.filter { it.projectId == project.id && !it.isCompleted }
+                        val projMins = activeTasksForProj.sumOf {
+                            val rem = (it.estimatedPomodoros - it.completedPomodoros).coerceAtLeast(0)
+                            rem * (it.customPomodoroMinutes ?: data.settings.pomodoroMinutes)
+                        }
                         ProjectSidebarRow(
                             project = project,
-                            activeCount = activeCount,
+                            summaryText = formatHomeRowSummary(projMins, activeTasksForProj.size, isArabic),
                             selected = uiState.destination == NavDestination.Project(project.id),
+                            primaryTextColor = primaryTextColor,
+                            secondaryTextColor = secondaryTextColor,
                             s = s,
                             onSelect = { onSelectDestination(NavDestination.Project(project.id)) },
                             onEdit = {
@@ -481,11 +388,17 @@ fun SidebarPanel(
         // Root (unfoldered) Projects
         val rootProjects = data.projects.filter { it.folderId == null && !it.isArchived }
         rootProjects.forEach { project ->
-            val activeCount = data.tasks.count { it.projectId == project.id && !it.isCompleted }
+            val activeTasksForProj = data.tasks.filter { it.projectId == project.id && !it.isCompleted }
+            val projMins = activeTasksForProj.sumOf {
+                val rem = (it.estimatedPomodoros - it.completedPomodoros).coerceAtLeast(0)
+                rem * (it.customPomodoroMinutes ?: data.settings.pomodoroMinutes)
+            }
             ProjectSidebarRow(
                 project = project,
-                activeCount = activeCount,
+                summaryText = formatHomeRowSummary(projMins, activeTasksForProj.size, isArabic),
                 selected = uiState.destination == NavDestination.Project(project.id),
+                primaryTextColor = primaryTextColor,
+                secondaryTextColor = secondaryTextColor,
                 s = s,
                 onSelect = { onSelectDestination(NavDestination.Project(project.id)) },
                 onEdit = {
@@ -497,6 +410,59 @@ fun SidebarPanel(
             )
         }
 
+        // Tags list pills if user has tags
+        if (data.tags.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+            ) {
+                data.tags.forEach { tag ->
+                    val isSelected = uiState.destination == NavDestination.Tag(tag.id)
+                    val tagColor = parseHexColor(tag.colorHex)
+                    val count = data.tasks.count { !it.isCompleted && it.tagIds.contains(tag.id) }
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) tagColor.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, if (isSelected) tagColor else MaterialTheme.colorScheme.outline),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onSelectDestination(NavDestination.Tag(tag.id)) }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "#${tag.name}",
+                                fontSize = 12.sp,
+                                color = tagColor,
+                                fontWeight = FontWeight.Medium
+                            )
+                            if (count > 0) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = count.toString(),
+                                    fontSize = 11.sp,
+                                    color = secondaryTextColor
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = s.delete,
+                                tint = secondaryTextColor.copy(alpha = 0.7f),
+                                modifier = Modifier
+                                    .size(13.dp)
+                                    .clickable { onDeleteTag(tag.id) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Archived Projects Accordion
         val archivedProjects = data.projects.filter { it.isArchived }
         if (archivedProjects.isNotEmpty()) {
@@ -505,34 +471,38 @@ fun SidebarPanel(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
                     .clickable { showArchived = !showArchived }
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 6.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Default.Archive,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = secondaryTextColor
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "${s.archivedProjects} (${archivedProjects.size})",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    color = secondaryTextColor,
                     modifier = Modifier.weight(1f)
                 )
                 Icon(
                     imageVector = if (showArchived) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = null,
+                    tint = secondaryTextColor,
                     modifier = Modifier.size(16.dp)
                 )
             }
             if (showArchived) {
                 archivedProjects.forEach { project ->
+                    val activeCount = data.tasks.count { it.projectId == project.id && !it.isCompleted }
                     ProjectSidebarRow(
                         project = project,
-                        activeCount = data.tasks.count { it.projectId == project.id && !it.isCompleted },
+                        summaryText = activeCount.toString(),
                         selected = uiState.destination == NavDestination.Project(project.id),
+                        primaryTextColor = primaryTextColor,
+                        secondaryTextColor = secondaryTextColor,
                         s = s,
                         onSelect = { onSelectDestination(NavDestination.Project(project.id)) },
                         onEdit = {
@@ -546,86 +516,78 @@ fun SidebarPanel(
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
-        // Tags Section
+        // Bottom Action Row:
+        // Right side (Start in RTL): "+ إنشاء مشروع" in Coral Red #E05246
+        // Left side (End in RTL): Add Folder and Add Tag Coral Red outline icons
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp),
+                .padding(vertical = 8.dp, horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = s.tags,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(
-                onClick = { showAddTagDialog = true },
-                modifier = Modifier.size(34.dp).testTag("add_tag_button")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable {
+                        editingProject = null
+                        showProjectDialog = true
+                    }
+                    .padding(vertical = 8.dp, horizontal = 4.dp)
+                    .testTag("add_project_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,
-                    contentDescription = s.newTag,
-                    modifier = Modifier.size(18.dp),
-                    tint = CoralPrimary
+                    contentDescription = s.newProject,
+                    tint = CoralPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isArabic) "إنشاء مشروع" else s.newProject,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = CoralPrimary
                 )
             }
-        }
 
-        Spacer(modifier = Modifier.height(4.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.padding(horizontal = 6.dp)
-        ) {
-            data.tags.forEach { tag ->
-                val isSelected = uiState.destination == NavDestination.Tag(tag.id)
-                val tagColor = parseHexColor(tag.colorHex)
-                val count = data.tasks.count { !it.isCompleted && it.tagIds.contains(tag.id) }
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (isSelected) tagColor.copy(alpha = 0.22f) else tagColor.copy(alpha = 0.1f),
-                    border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, tagColor) else null,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                IconButton(
+                    onClick = { showAddTagDialog = true },
                     modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { onSelectDestination(NavDestination.Tag(tag.id)) }
+                        .size(38.dp)
+                        .testTag("add_tag_button")
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = "#${tag.name}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = tagColor,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        if (count > 0) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = count.toString(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = tagColor.copy(alpha = 0.8f)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = s.delete,
-                            tint = tagColor.copy(alpha = 0.55f),
-                            modifier = Modifier
-                                .size(14.dp)
-                                .clickable { onDeleteTag(tag.id) }
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Outlined.LocalOffer,
+                        contentDescription = s.newTag,
+                        tint = CoralPrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                IconButton(
+                    onClick = { showAddFolderDialog = true },
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("add_folder_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.CreateNewFolder,
+                        contentDescription = s.newFolder,
+                        tint = CoralPrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
         }
-        Spacer(modifier = Modifier.height(80.dp))
+
+        Spacer(modifier = Modifier.height(96.dp))
     }
 
     // Dialogs
@@ -677,41 +639,18 @@ fun SidebarPanel(
     }
 }
 
-@Composable
-private fun SidebarTopActionChip(
-    icon: ImageVector,
-    label: String,
-    tint: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = tint,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+private fun formatHomeRowSummary(estMins: Int, count: Int, isArabic: Boolean): String {
+    val timeStr = if (estMins >= 60 && estMins % 60 == 0) {
+        val h = estMins / 60
+        if (isArabic) "$h س" else "${h}h"
+    } else if (estMins > 60) {
+        val h = estMins / 60
+        val m = estMins % 60
+        if (isArabic) "$h س $m د" else "${h}h ${m}m"
+    } else {
+        if (isArabic) "$estMins د" else "${estMins}m"
     }
+    return "$timeStr   $count"
 }
 
 @Composable
@@ -719,62 +658,55 @@ private fun SidebarNavRow(
     title: String,
     icon: ImageVector,
     iconTint: Color,
-    count: Int,
-    subtitleTime: String?,
+    summaryText: String,
     selected: Boolean,
+    primaryTextColor: Color,
+    secondaryTextColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val bg = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f) else Color.Transparent
+    val bg = if (selected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f) else Color.Transparent
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(bg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
+            .padding(horizontal = 6.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             tint = iconTint,
-            modifier = Modifier.size(19.dp)
+            modifier = Modifier.size(20.dp)
         )
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(14.dp))
         Text(
             text = title,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = if (selected) CoralPrimary else MaterialTheme.colorScheme.onSurface,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            color = primaryTextColor,
             modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        if (subtitleTime != null) {
-            Text(
-                text = subtitleTime,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 6.dp)
-            )
-        }
-        if (count > 0) {
-            Text(
-                text = count.toString(),
-                style = MaterialTheme.typography.labelMedium,
-                color = if (selected) CoralPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
+        Text(
+            text = summaryText,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Normal,
+            color = secondaryTextColor
+        )
     }
 }
 
 @Composable
 private fun ProjectSidebarRow(
     project: ProjectItem,
-    activeCount: Int,
+    summaryText: String,
     selected: Boolean,
+    primaryTextColor: Color,
+    secondaryTextColor: Color,
     s: Strings,
     onSelect: () -> Unit,
     onEdit: () -> Unit,
@@ -783,7 +715,7 @@ private fun ProjectSidebarRow(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val projColor = parseHexColor(project.colorHex)
-    val bg = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f) else Color.Transparent
+    val bg = if (selected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f) else Color.Transparent
 
     Row(
         modifier = Modifier
@@ -791,7 +723,7 @@ private fun ProjectSidebarRow(
             .clip(RoundedCornerShape(10.dp))
             .background(bg)
             .clickable(onClick = onSelect)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = 6.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
@@ -800,23 +732,22 @@ private fun ProjectSidebarRow(
                 .clip(CircleShape)
                 .background(projColor)
         )
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(14.dp))
         Text(
             text = project.name,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            color = primaryTextColor,
             modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        if (activeCount > 0) {
-            Text(
-                text = activeCount.toString(),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 2.dp)
-            )
-        }
+        Text(
+            text = summaryText,
+            fontSize = 12.sp,
+            color = secondaryTextColor,
+            modifier = Modifier.padding(end = 2.dp)
+        )
         Box {
             IconButton(
                 onClick = { menuOpen = true },
@@ -826,7 +757,7 @@ private fun ProjectSidebarRow(
                     imageVector = Icons.Default.MoreVert,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = secondaryTextColor
                 )
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -862,13 +793,13 @@ private fun ProjectSidebarRow(
 }
 
 private fun smartListVisual(type: SmartListType): Pair<ImageVector, Color> = when (type) {
-    SmartListType.TODAY -> Icons.Default.Today to ForestEmerald
-    SmartListType.TOMORROW -> Icons.Default.WbSunny to SunlightGold
-    SmartListType.UPCOMING -> Icons.Default.DateRange to PriorityLowColor
-    SmartListType.SOMEDAY -> Icons.Default.AllInclusive to Color(0xFF8B5CF6)
-    SmartListType.EVENTS -> Icons.Default.Event to CoralPrimary
-    SmartListType.INBOX -> Icons.AutoMirrored.Filled.List to Color(0xFF0EA5E9)
-    SmartListType.COMPLETED -> Icons.Default.CheckCircle to Color(0xFF64748B)
+    SmartListType.TODAY -> Icons.Outlined.WbSunny to CatTodayGreen
+    SmartListType.TOMORROW -> Icons.Outlined.WbTwilight to CatTomorrowOrange
+    SmartListType.UPCOMING -> Icons.Outlined.DateRange to CatWeekPurple
+    SmartListType.SOMEDAY -> Icons.Outlined.EventAvailable to CatPlannedBlue
+    SmartListType.EVENTS -> Icons.Outlined.GridView to CatCalendarTeal
+    SmartListType.COMPLETED -> Icons.Outlined.CheckCircle to CatCompletedGray
+    SmartListType.INBOX -> Icons.Outlined.Inbox to CatTasksInboxBlue
 }
 
 @Composable
@@ -966,7 +897,9 @@ private fun ProjectEditorDialog(
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = if (noneSelected) CoralPrimary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { selectedFolderId = null }
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { selectedFolderId = null }
                         ) {
                             Text(
                                 text = s.noFolder,
@@ -979,7 +912,9 @@ private fun ProjectEditorDialog(
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = if (isSel) CoralPrimary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { selectedFolderId = folder.id }
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { selectedFolderId = folder.id }
                             ) {
                                 Text(
                                     text = folder.name,
@@ -1014,7 +949,7 @@ private fun TagEditorDialog(
     onConfirm: (String, String) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
-    var selectedColor by remember { mutableStateOf(ProjectColorPalette[3]) }
+    var selectedColor by remember { mutableStateOf(ProjectColorPalette[1]) }
 
     AlertDialog(
         onDismissRequest = onDismiss,

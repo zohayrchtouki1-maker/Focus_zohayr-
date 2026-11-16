@@ -1,10 +1,13 @@
 package com.example.ui.components
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,19 +27,25 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.AlarmOn
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.BatterySaver
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.MergeType
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SettingsApplications
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -50,6 +59,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,17 +74,29 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
+import com.example.data.BackupImportMode
+import com.example.data.FocusRepository
 import com.example.i18n.Strings
+import com.example.model.AppBackupState
 import com.example.model.AppLanguage
 import com.example.model.AppSettings
 import com.example.notifications.SystemPermissionsHelper
 import com.example.ui.theme.CoralPrimary
+import com.example.ui.theme.DarkBackground
+import com.example.ui.theme.DarkOutline
+import com.example.ui.theme.DarkSurface
+import com.example.ui.theme.DarkSurfaceVariant
+import com.example.ui.theme.DarkTextPrimary
+import com.example.ui.theme.DarkTextSecondary
 import com.example.ui.theme.ForestEmerald
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.PriorityHighColor
 import com.example.ui.theme.PriorityLowColor
 import com.example.ui.theme.SunlightGold
 import com.example.viewmodel.MainUiState
+import java.io.File
 import kotlin.math.roundToInt
 
 @Composable
@@ -86,17 +108,30 @@ fun SettingsDialog(
     onRequestPermissions: () -> Unit,
     onOpenBackgroundPermissionsModal: () -> Unit,
     onExportJson: () -> String,
-    onImportJson: (String) -> Boolean,
+    onCreateShareableBackupFile: () -> File,
+    onParseBackupPreview: (String) -> AppBackupState?,
+    onImportBackupState: (AppBackupState, BackupImportMode) -> Unit,
     onResetDemoData: () -> Unit
 ) {
     BackHandler { onDismiss() }
 
     val context = LocalContext.current
     val settings = uiState.data.settings
+    val isArabic = settings.language == AppLanguage.AR
     val permSnapshot = uiState.systemPermissions
     var backupFeedback by remember { mutableStateOf<String?>(null) }
+    var backupIsError by remember { mutableStateOf(false) }
+    var pendingImportState by remember { mutableStateOf<AppBackupState?>(null) }
 
-    val exportLauncher = rememberLauncherForActivityResult(
+    var expandPomodoroSection by remember { mutableStateOf(false) }
+    var expandProjectsSection by remember { mutableStateOf(false) }
+    var expandGeneralSection by remember { mutableStateOf(false) }
+    var expandAppearanceSection by remember { mutableStateOf(false) }
+    var showUserGuideDialog by remember { mutableStateOf(false) }
+
+    val defaultBackupFileName = remember { FocusRepository.generateBackupFileName() }
+
+    val exportSaveLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         if (uri != null) {
@@ -105,10 +140,53 @@ fun SettingsDialog(
                 context.contentResolver.openOutputStream(uri)?.use { out ->
                     out.write(json.toByteArray(Charsets.UTF_8))
                 }
-                backupFeedback = s.backupSuccessExport
+                backupIsError = false
+                backupFeedback = if (isArabic) {
+                    "تم حفظ النسخة الاحتياطية بنجاح ($defaultBackupFileName)"
+                } else {
+                    "Backup saved successfully ($defaultBackupFileName)"
+                }
             } catch (_: Exception) {
+                backupIsError = true
                 backupFeedback = s.backupError
             }
+        }
+    }
+
+    fun triggerShareBackupSheet() {
+        try {
+            val backupFile = onCreateShareableBackupFile()
+            val authority = "${context.packageName}.fileprovider"
+            val contentUri = FileProvider.getUriForFile(context, authority, backupFile)
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_STREAM, contentUri)
+                putExtra(Intent.EXTRA_SUBJECT, backupFile.name)
+                putExtra(
+                    Intent.EXTRA_TEXT,
+                    if (isArabic) {
+                        "نسخة احتياطية لتطبيق Focus To-Do (${backupFile.name})"
+                    } else {
+                        "Focus To-Do Backup (${backupFile.name})"
+                    }
+                )
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(
+                shareIntent,
+                if (isArabic) "تصدير ومشاركة النسخة الاحتياطية" else "Export & Share Backup"
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+            backupIsError = false
+            backupFeedback = if (isArabic) {
+                "تم تجهيز ملف النسخة الاحتياطية (${backupFile.name}) للمشاركة أو الحفظ"
+            } else {
+                "Backup file (${backupFile.name}) ready to share or save"
+            }
+        } catch (_: Exception) {
+            exportSaveLauncher.launch(FocusRepository.generateBackupFileName())
         }
     }
 
@@ -120,12 +198,20 @@ fun SettingsDialog(
                 val raw = context.contentResolver.openInputStream(uri)?.use { input ->
                     input.bufferedReader(Charsets.UTF_8).readText()
                 }
-                backupFeedback = if (raw != null && onImportJson(raw)) {
-                    s.backupSuccessImport
+                val parsed = if (raw != null) onParseBackupPreview(raw) else null
+                if (parsed != null) {
+                    pendingImportState = parsed
+                    backupIsError = false
                 } else {
-                    s.backupError
+                    backupIsError = true
+                    backupFeedback = if (isArabic) {
+                        "ملف النسخة الاحتياطية غير صالح أو تالف."
+                    } else {
+                        "Invalid or corrupted backup JSON file."
+                    }
                 }
             } catch (_: Exception) {
+                backupIsError = true
                 backupFeedback = s.backupError
             }
         }
@@ -133,7 +219,7 @@ fun SettingsDialog(
 
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
+        color = DarkBackground
     ) {
         Column(
             modifier = Modifier
@@ -141,226 +227,240 @@ fun SettingsDialog(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
+            // Top bar: Right-aligned `>` + "الإعدادات"
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("close_settings_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                        contentDescription = s.cancel,
+                        tint = DarkTextPrimary,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
                 Text(
                     text = s.settingsTitle,
-                    style = MaterialTheme.typography.headlineMedium,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
+                    color = DarkTextPrimary,
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(onClick = onDismiss, modifier = Modifier.testTag("close_settings_button")) {
-                    Icon(Icons.Default.Close, contentDescription = s.cancel)
-                }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
+            // Grouped dark cards (#1C1C21, 12dp radius) separated by 12dp #121215 gaps
             LazyColumn(
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
             ) {
-                // 1. Notifications & Background Permissions Section (الإشعارات وأذونات الخلفية)
+                // Group 1: Local Backup & Restore (النسخ الاحتياطي والاستيراد)
                 item {
-                    SettingsSectionCard(title = s.notificationsAndPermissionsSection) {
-                        SettingsSwitchWithSubtitleRow(
-                            label = s.enableTaskRemindersLabel,
-                            subtitle = s.enableTaskRemindersDesc,
-                            checked = settings.enableTaskReminders,
-                            onCheckedChange = { enabled ->
-                                onUpdateSettings { it.copy(enableTaskReminders = enabled) }
-                            },
-                            testTag = "toggle_task_reminders"
-                        )
-
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                        SettingsSwitchWithSubtitleRow(
-                            label = s.persistentTimerNotificationLabel,
-                            subtitle = s.persistentTimerNotificationDesc,
-                            checked = settings.persistentTimerNotification,
-                            onCheckedChange = { enabled ->
-                                onUpdateSettings { it.copy(persistentTimerNotification = enabled) }
-                            },
-                            testTag = "toggle_persistent_timer_notification"
-                        )
-
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                        SettingsSwitchWithSubtitleRow(
-                            label = s.alarmSoundAndVibrationLabel,
-                            subtitle = s.alarmSoundAndVibrationDesc,
-                            checked = settings.alarmSoundAndVibration && settings.alarmEnabled,
-                            onCheckedChange = { enabled ->
-                                onUpdateSettings {
-                                    it.copy(alarmSoundAndVibration = enabled, alarmEnabled = enabled)
-                                }
-                            },
-                            testTag = "toggle_alarm_sound_vibration"
-                        )
-
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                        // System Permissions Status & Direct Shortcuts
-                        Text(
-                            text = s.systemPermissionsStatusLabel,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-
-                        PermissionStatusRow(
-                            label = s.notificationsPermissionLabel,
-                            isGranted = permSnapshot.notificationsGranted,
-                            s = s,
-                            onClick = {
-                                if (!permSnapshot.notificationsGranted) {
-                                    onRequestPermissions()
-                                    SystemPermissionsHelper.openAppNotificationSettings(context)
-                                } else {
-                                    SystemPermissionsHelper.openAppNotificationSettings(context)
-                                }
-                            }
-                        )
-
-                        PermissionStatusRow(
-                            label = s.exactAlarmsPermissionLabel,
-                            isGranted = permSnapshot.exactAlarmsGranted,
-                            s = s,
-                            onClick = {
-                                SystemPermissionsHelper.openExactAlarmSettings(context)
-                            }
-                        )
-
-                        PermissionStatusRow(
-                            label = s.batteryUnrestrictedLabel,
-                            isGranted = permSnapshot.ignoringBatteryOptimizations,
-                            s = s,
-                            onClick = {
-                                SystemPermissionsHelper.openIgnoreBatteryOptimizations(context)
-                            }
-                        )
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        Button(
-                            onClick = onOpenBackgroundPermissionsModal,
-                            colors = ButtonDefaults.buttonColors(containerColor = CoralPrimary, contentColor = Color.White),
-                            shape = RoundedCornerShape(percent = 50),
+                    GroupedSettingsCard {
+                        // Top profile/status header row
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .testTag("open_background_permissions_button")
-                        ) {
-                            Icon(Icons.Default.Security, null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = s.openBackgroundPermissionsButton,
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-
-                // 2. Pomodoro Durations
-                item {
-                    SettingsSectionCard(title = s.pomodoroSettings) {
-                        SettingsSliderRow(
-                            label = s.pomodoroLength,
-                            value = settings.pomodoroMinutes,
-                            range = 1f..120f,
-                            unit = s.minutesShort,
-                            onChange = { v -> onUpdateSettings { it.copy(pomodoroMinutes = v) } }
-                        )
-                        SettingsSliderRow(
-                            label = s.shortBreakLength,
-                            value = settings.shortBreakMinutes,
-                            range = 1f..30f,
-                            unit = s.minutesShort,
-                            onChange = { v -> onUpdateSettings { it.copy(shortBreakMinutes = v) } }
-                        )
-                        SettingsSliderRow(
-                            label = s.longBreakLength,
-                            value = settings.longBreakMinutes,
-                            range = 5f..60f,
-                            unit = s.minutesShort,
-                            onChange = { v -> onUpdateSettings { it.copy(longBreakMinutes = v) } }
-                        )
-                        SettingsSliderRow(
-                            label = s.longBreakInterval,
-                            value = settings.longBreakInterval,
-                            range = 2f..8f,
-                            unit = "",
-                            onChange = { v -> onUpdateSettings { it.copy(longBreakInterval = v) } }
-                        )
-                    }
-                }
-
-                // 3. Automation Toggles
-                item {
-                    SettingsSectionCard(title = s.automation) {
-                        SettingsSwitchRow(
-                            label = s.autoStartBreaks,
-                            checked = settings.autoStartBreaks,
-                            onCheckedChange = { c -> onUpdateSettings { it.copy(autoStartBreaks = c) } }
-                        )
-                        SettingsSwitchRow(
-                            label = s.autoStartNextPomodoro,
-                            checked = settings.autoStartNextPomodoro,
-                            onCheckedChange = { c -> onUpdateSettings { it.copy(autoStartNextPomodoro = c) } }
-                        )
-                        SettingsSwitchRow(
-                            label = s.disableBreaks,
-                            checked = settings.disableBreaks,
-                            onCheckedChange = { c -> onUpdateSettings { it.copy(disableBreaks = c) } }
-                        )
-                    }
-                }
-
-                // 4. Sound & Appearance
-                item {
-                    SettingsSectionCard(title = s.soundAndAppearance) {
-                        SettingsSwitchRow(
-                            label = s.alarmSound,
-                            checked = settings.alarmEnabled && settings.alarmSoundAndVibration,
-                            onCheckedChange = { c ->
-                                onUpdateSettings { it.copy(alarmEnabled = c, alarmSoundAndVibration = c) }
-                            }
-                        )
-                        SettingsSwitchRow(
-                            label = s.darkMode,
-                            checked = settings.darkTheme,
-                            onCheckedChange = { c -> onUpdateSettings { it.copy(darkTheme = c) } }
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
+                                .padding(horizontal = 14.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = s.languageLabel,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf(AppLanguage.AR to s.arabicLang, AppLanguage.EN to s.englishLang).forEach { (lang, lbl) ->
-                                    val active = settings.language == lang
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (active) CoralPrimary else MaterialTheme.colorScheme.surfaceVariant,
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .clickable { onUpdateSettings { it.copy(language = lang) } }
+                            Box(contentAlignment = Alignment.BottomEnd) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape)
+                                        .background(DarkSurfaceVariant)
+                                        .border(1.dp, DarkOutline, CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = null,
+                                        tint = DarkTextSecondary,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(11.dp)
+                                        .clip(CircleShape)
+                                        .background(ForestEmerald)
+                                        .border(1.5.dp, DarkSurface, CircleShape)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (isArabic) "النسخ الاحتياطي والاستيراد" else "Backup & Restore",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = DarkTextPrimary
+                                )
+                                Text(
+                                    text = if (isArabic) {
+                                        "النسخ الاحتياطي المحلي مفعل ($defaultBackupFileName)"
+                                    } else {
+                                        "Local JSON Backup Active ($defaultBackupFileName)"
+                                    },
+                                    fontSize = 11.sp,
+                                    color = DarkTextSecondary
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(color = DarkOutline, thickness = 0.8.dp)
+
+                        Column(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // 1. Export Backup (تصدير نسخة احتياطية)
+                            Button(
+                                onClick = { triggerShareBackupSheet() },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = CoralPrimary,
+                                    contentColor = Color.White
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("export_json_button")
+                            ) {
+                                Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Export Backup (تصدير نسخة احتياطية)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                            }
+
+                            // Direct Save to Device Downloads option
+                            OutlinedButton(
+                                onClick = {
+                                    exportSaveLauncher.launch(FocusRepository.generateBackupFileName())
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = DarkSurfaceVariant,
+                                    contentColor = DarkTextPrimary
+                                ),
+                                border = BorderStroke(1.dp, DarkOutline),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .testTag("save_backup_file_button")
+                            ) {
+                                Icon(Icons.Default.SaveAlt, null, modifier = Modifier.size(17.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (isArabic) {
+                                        "حفظ ملف النسخة في الجهاز ($defaultBackupFileName)"
+                                    } else {
+                                        "Save Backup File to Device ($defaultBackupFileName)"
+                                    },
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1
+                                )
+                            }
+
+                            // 2. Import Backup (استيراد نسخة احتياطية)
+                            OutlinedButton(
+                                onClick = {
+                                    importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = DarkSurfaceVariant,
+                                    contentColor = DarkTextPrimary
+                                ),
+                                border = BorderStroke(1.dp, CoralPrimary.copy(alpha = 0.6f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("import_json_button")
+                            ) {
+                                Icon(Icons.Default.Upload, null, tint = CoralPrimary, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Import Backup (استيراد نسخة احتياطية)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = DarkTextPrimary,
+                                    maxLines = 1
+                                )
+                            }
+
+                            // Reset Demo / Local Data
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        onResetDemoData()
+                                        backupIsError = false
+                                        backupFeedback = if (isArabic) {
+                                            "تمت إعادة ضبط البيانات بنجاح."
+                                        } else {
+                                            "Data reset completed successfully."
+                                        }
+                                    }
+                                    .padding(vertical = 6.dp)
+                                    .testTag("reset_demo_button"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.RestartAlt,
+                                    null,
+                                    tint = DarkTextSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = s.resetDemoData,
+                                    fontSize = 12.sp,
+                                    color = DarkTextSecondary
+                                )
+                            }
+
+                            if (backupFeedback != null) {
+                                val bannerColor = if (backupIsError) PriorityHighColor else ForestEmerald
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = bannerColor.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, bannerColor.copy(alpha = 0.5f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("backup_feedback_banner")
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                                     ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = bannerColor,
+                                            modifier = Modifier.size(18.dp)
+                                        )
                                         Text(
-                                            text = lbl,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
-                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                            text = backupFeedback!!,
+                                            fontSize = 12.sp,
+                                            color = bannerColor,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     }
                                 }
@@ -369,69 +469,497 @@ fun SettingsDialog(
                     }
                 }
 
-                // 5. JSON Export/Import & Reset Demo Data
+                // Group 2: مؤقت بومودورو + إدارة المشاريع
                 item {
-                    SettingsSectionCard(title = s.dataBackup) {
+                    GroupedSettingsCard {
+                        SettingsChevronRow(
+                            title = if (isArabic) "مؤقت بومودورو" else s.pomodoroSettings,
+                            valueText = "${settings.pomodoroMinutes} ${s.minutesShort}",
+                            onClick = { expandPomodoroSection = !expandPomodoroSection }
+                        )
+
+                        AnimatedVisibility(visible = expandPomodoroSection) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(DarkBackground.copy(alpha = 0.45f))
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                SettingsSliderRow(
+                                    label = s.pomodoroLength,
+                                    value = settings.pomodoroMinutes,
+                                    range = 1f..120f,
+                                    unit = s.minutesShort,
+                                    onChange = { v -> onUpdateSettings { it.copy(pomodoroMinutes = v) } }
+                                )
+                                SettingsSliderRow(
+                                    label = s.shortBreakLength,
+                                    value = settings.shortBreakMinutes,
+                                    range = 1f..30f,
+                                    unit = s.minutesShort,
+                                    onChange = { v -> onUpdateSettings { it.copy(shortBreakMinutes = v) } }
+                                )
+                                SettingsSliderRow(
+                                    label = s.longBreakLength,
+                                    value = settings.longBreakMinutes,
+                                    range = 5f..60f,
+                                    unit = s.minutesShort,
+                                    onChange = { v -> onUpdateSettings { it.copy(longBreakMinutes = v) } }
+                                )
+                                SettingsSliderRow(
+                                    label = s.longBreakInterval,
+                                    value = settings.longBreakInterval,
+                                    range = 2f..8f,
+                                    unit = "",
+                                    onChange = { v -> onUpdateSettings { it.copy(longBreakInterval = v) } }
+                                )
+                                HorizontalDivider(color = DarkOutline)
+                                SettingsSwitchRow(
+                                    label = s.autoStartBreaks,
+                                    checked = settings.autoStartBreaks,
+                                    onCheckedChange = { c -> onUpdateSettings { it.copy(autoStartBreaks = c) } }
+                                )
+                                SettingsSwitchRow(
+                                    label = s.autoStartNextPomodoro,
+                                    checked = settings.autoStartNextPomodoro,
+                                    onCheckedChange = { c -> onUpdateSettings { it.copy(autoStartNextPomodoro = c) } }
+                                )
+                                SettingsSwitchRow(
+                                    label = s.disableBreaks,
+                                    checked = settings.disableBreaks,
+                                    onCheckedChange = { c -> onUpdateSettings { it.copy(disableBreaks = c) } }
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(color = DarkOutline, thickness = 0.8.dp)
+
+                        SettingsChevronRow(
+                            title = if (isArabic) "إدارة المشاريع" else "Manage Projects",
+                            valueText = "${uiState.data.projects.size}",
+                            onClick = { expandProjectsSection = !expandProjectsSection }
+                        )
+
+                        AnimatedVisibility(visible = expandProjectsSection) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(DarkBackground.copy(alpha = 0.45f))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                uiState.data.projects.forEach { proj ->
+                                    val taskCount = uiState.data.tasks.count { it.projectId == proj.id && !it.isCompleted }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .clip(CircleShape)
+                                                .background(parseHexColor(proj.colorHex))
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text(
+                                            text = proj.name,
+                                            fontSize = 13.sp,
+                                            color = DarkTextPrimary,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Text(
+                                            text = "$taskCount",
+                                            fontSize = 12.sp,
+                                            color = DarkTextSecondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Group 3: عام, المظهر, أذونات المؤقت في الخلفية, دليل المستخدم
+                item {
+                    GroupedSettingsCard {
+                        // عام (General & Notifications)
+                        SettingsChevronRow(
+                            title = if (isArabic) "عام" else "General",
+                            onClick = { expandGeneralSection = !expandGeneralSection }
+                        )
+
+                        AnimatedVisibility(visible = expandGeneralSection) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(DarkBackground.copy(alpha = 0.45f))
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                SettingsSwitchWithSubtitleRow(
+                                    label = s.enableTaskRemindersLabel,
+                                    subtitle = s.enableTaskRemindersDesc,
+                                    checked = settings.enableTaskReminders,
+                                    onCheckedChange = { enabled ->
+                                        onUpdateSettings { it.copy(enableTaskReminders = enabled) }
+                                    },
+                                    testTag = "toggle_task_reminders"
+                                )
+                                SettingsSwitchWithSubtitleRow(
+                                    label = s.persistentTimerNotificationLabel,
+                                    subtitle = s.persistentTimerNotificationDesc,
+                                    checked = settings.persistentTimerNotification,
+                                    onCheckedChange = { enabled ->
+                                        onUpdateSettings { it.copy(persistentTimerNotification = enabled) }
+                                    },
+                                    testTag = "toggle_persistent_timer_notification"
+                                )
+                                SettingsSwitchWithSubtitleRow(
+                                    label = s.alarmSoundAndVibrationLabel,
+                                    subtitle = s.alarmSoundAndVibrationDesc,
+                                    checked = settings.alarmSoundAndVibration && settings.alarmEnabled,
+                                    onCheckedChange = { enabled ->
+                                        onUpdateSettings {
+                                            it.copy(alarmSoundAndVibration = enabled, alarmEnabled = enabled)
+                                        }
+                                    },
+                                    testTag = "toggle_alarm_sound_vibration"
+                                )
+
+                                HorizontalDivider(color = DarkOutline)
+
+                                PermissionStatusRow(
+                                    label = s.notificationsPermissionLabel,
+                                    isGranted = permSnapshot.notificationsGranted,
+                                    s = s,
+                                    onClick = {
+                                        if (!permSnapshot.notificationsGranted) {
+                                            onRequestPermissions()
+                                        }
+                                        SystemPermissionsHelper.openAppNotificationSettings(context)
+                                    }
+                                )
+                                PermissionStatusRow(
+                                    label = s.exactAlarmsPermissionLabel,
+                                    isGranted = permSnapshot.exactAlarmsGranted,
+                                    s = s,
+                                    onClick = {
+                                        SystemPermissionsHelper.openExactAlarmSettings(context)
+                                    }
+                                )
+                                PermissionStatusRow(
+                                    label = s.batteryUnrestrictedLabel,
+                                    isGranted = permSnapshot.ignoringBatteryOptimizations,
+                                    s = s,
+                                    onClick = {
+                                        SystemPermissionsHelper.openIgnoreBatteryOptimizations(context)
+                                    }
+                                )
+
+                                HorizontalDivider(color = DarkOutline)
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = s.languageLabel,
+                                        fontSize = 13.sp,
+                                        color = DarkTextPrimary,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        listOf(AppLanguage.AR to s.arabicLang, AppLanguage.EN to s.englishLang).forEach { (lang, lbl) ->
+                                            val active = settings.language == lang
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = if (active) CoralPrimary else DarkSurfaceVariant,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .clickable { onUpdateSettings { it.copy(language = lang) } }
+                                            ) {
+                                                Text(
+                                                    text = lbl,
+                                                    fontSize = 12.sp,
+                                                    color = if (active) Color.White else DarkTextPrimary,
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(color = DarkOutline, thickness = 0.8.dp)
+
+                        // المظهر (Appearance)
+                        SettingsChevronRow(
+                            title = if (isArabic) "المظهر" else "Appearance",
+                            valueText = if (settings.darkTheme) (if (isArabic) "داكن" else "Dark") else (if (isArabic) "فاتح" else "Light"),
+                            onClick = { expandAppearanceSection = !expandAppearanceSection }
+                        )
+
+                        AnimatedVisibility(visible = expandAppearanceSection) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(DarkBackground.copy(alpha = 0.45f))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                            ) {
+                                SettingsSwitchRow(
+                                    label = s.darkMode,
+                                    checked = settings.darkTheme,
+                                    onCheckedChange = { c -> onUpdateSettings { it.copy(darkTheme = c) } }
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(color = DarkOutline, thickness = 0.8.dp)
+
+                        // أذونات المؤقت في الخلفية (Background Timer Permissions)
+                        SettingsChevronRow(
+                            title = if (isArabic) "أذونات المؤقت في الخلفية" else "Background Timer Permissions",
+                            onClick = onOpenBackgroundPermissionsModal,
+                            modifier = Modifier.testTag("open_background_permissions_button")
+                        )
+
+                        HorizontalDivider(color = DarkOutline, thickness = 0.8.dp)
+
+                        // دليل المستخدم (User Guide)
+                        SettingsChevronRow(
+                            title = if (isArabic) "دليل المستخدم" else "User Guide",
+                            onClick = { showUserGuideDialog = true }
+                        )
+                    }
+                }
+
+                // Group 4: الإصدار (18.0 on left)
+                item {
+                    GroupedSettingsCard {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 15.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Button(
-                                onClick = { exportLauncher.launch("focus_todo_backup.json") },
-                                colors = ButtonDefaults.buttonColors(containerColor = CoralPrimary, contentColor = Color.White),
-                                shape = RoundedCornerShape(percent = 50),
-                                modifier = Modifier.weight(1f).testTag("export_json_button")
-                            ) {
-                                Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(s.exportJson, maxLines = 1)
-                            }
-                            OutlinedButton(
-                                onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
-                                shape = RoundedCornerShape(percent = 50),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = MaterialTheme.colorScheme.secondary,
-                                    contentColor = MaterialTheme.colorScheme.onSecondary
-                                ),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                                modifier = Modifier.weight(1f).testTag("import_json_button")
-                            ) {
-                                Icon(Icons.Default.Upload, null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(s.importJson, maxLines = 1)
-                            }
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                onResetDemoData()
-                                backupFeedback = s.backupSuccessImport
-                            },
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = MaterialTheme.colorScheme.secondary,
-                                contentColor = MaterialTheme.colorScheme.onSecondary
-                            ),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                            shape = RoundedCornerShape(percent = 50),
-                            modifier = Modifier.fillMaxWidth().testTag("reset_demo_button")
-                        ) {
-                            Icon(Icons.Default.RestartAlt, null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(s.resetDemoData)
-                        }
-
-                        if (backupFeedback != null) {
                             Text(
-                                text = backupFeedback!!,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = ForestEmerald,
-                                fontWeight = FontWeight.SemiBold
+                                text = if (isArabic) "الإصدار" else "Version",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = DarkTextPrimary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "18.0",
+                                fontSize = 13.sp,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                color = DarkTextSecondary
                             )
                         }
                     }
                 }
             }
         }
+    }
+
+    // Confirmation Dialog for Import Backup: Merge vs Replace
+    pendingImportState?.let { importedState ->
+        AlertDialog(
+            onDismissRequest = { pendingImportState = null },
+            shape = RoundedCornerShape(14.dp),
+            containerColor = DarkSurface,
+            title = {
+                Text(
+                    text = if (isArabic) {
+                        "استيراد النسخة الاحتياطية (Import Backup)"
+                    } else {
+                        "Import Backup (استيراد نسخة احتياطية)"
+                    },
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = DarkTextPrimary
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = if (isArabic) {
+                            "يحتوي ملف النسخة الاحتياطية على ${importedState.tasks.size} مهمة، و ${importedState.projects.size} مشروع، و ${importedState.focusRecords.size} سجل تركيز.\nكيف ترغب في استعادة البيانات؟"
+                        } else {
+                            "This backup contains ${importedState.tasks.size} tasks, ${importedState.projects.size} projects, and ${importedState.focusRecords.size} focus records.\nHow would you like to restore the data?"
+                        },
+                        fontSize = 13.sp,
+                        color = DarkTextSecondary
+                    )
+
+                    // Option 1: Merge (دمج مع المهام الحالية)
+                    Button(
+                        onClick = {
+                            onImportBackupState(importedState, BackupImportMode.MERGE)
+                            pendingImportState = null
+                            backupIsError = false
+                            backupFeedback = if (isArabic) {
+                                "تم دمج النسخة الاحتياطية مع المهام الحالية بنجاح!"
+                            } else {
+                                "Backup merged with current tasks successfully!"
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CoralPrimary,
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .testTag("confirm_import_merge_button")
+                    ) {
+                        Icon(Icons.Default.MergeType, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Merge (دمج مع المهام الحالية)",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Option 2: Replace (استبدال الكل)
+                    OutlinedButton(
+                        onClick = {
+                            onImportBackupState(importedState, BackupImportMode.REPLACE)
+                            pendingImportState = null
+                            backupIsError = false
+                            backupFeedback = if (isArabic) {
+                                "تم استبدال البيانات واستعادة النسخة الاحتياطية بنجاح!"
+                            } else {
+                                "All data replaced from backup successfully!"
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = DarkSurfaceVariant,
+                            contentColor = DarkTextPrimary
+                        ),
+                        border = BorderStroke(1.dp, DarkOutline),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .testTag("confirm_import_replace_button")
+                    ) {
+                        Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Replace (استبدال الكل)",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(
+                    onClick = { pendingImportState = null },
+                    modifier = Modifier.testTag("cancel_import_dialog_button")
+                ) {
+                    Text(s.cancel, color = DarkTextSecondary)
+                }
+            }
+        )
+    }
+
+    if (showUserGuideDialog) {
+        AlertDialog(
+            onDismissRequest = { showUserGuideDialog = false },
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(14.dp),
+            title = {
+                Text(
+                    text = if (isArabic) "دليل المستخدم" else "User Guide",
+                    color = DarkTextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = if (isArabic) {
+                            "1. تقنية بومودورو: قسّم عملك إلى جلسات تركيز (25 دقيقة) تليها استراحة قصيرة (5 دقائق).\n" +
+                                "2. إدارة المهام: نظّم مهامك في قوائم اليوم، غدًا، هذا الأسبوع، أو داخل مشاريع ومجلدات مخصصة.\n" +
+                                "3. التقويم والإحصائيات: تابع المهام المجدولة والمكتملة بالساعة وراقب تقدمك اليومي والأسبوعي.\n" +
+                                "4. النسخ الاحتياطي المحلي: صدّر ملف JSON في أي وقت لحفظ نسخة احتياطية كاملة أو استيرادها مع خيار الدمج أو الاستبدال."
+                        } else {
+                            "1. Pomodoro Technique: Break work into 25-minute focus sessions followed by 5-minute breaks.\n" +
+                                "2. Task Management: Organize tasks into Today, Tomorrow, This Week, or custom Projects & Folders.\n" +
+                                "3. Calendar & Statistics: Track scheduled and completed tasks hourly and monitor daily goals.\n" +
+                                "4. Local Backup: Export a complete JSON backup anytime and import with Merge or Replace."
+                        },
+                        fontSize = 13.sp,
+                        lineHeight = 20.sp,
+                        color = DarkTextSecondary
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showUserGuideDialog = false }) {
+                    Text(if (isArabic) "حسناً" else "Got it", color = CoralPrimary)
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun GroupedSettingsCard(
+    content: @Composable () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = DarkSurface,
+        border = BorderStroke(1.dp, DarkOutline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsChevronRow(
+    title: String,
+    valueText: String? = null,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 15.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            color = DarkTextPrimary,
+            modifier = Modifier.weight(1f)
+        )
+        if (valueText != null) {
+            Text(
+                text = valueText,
+                fontSize = 12.sp,
+                color = DarkTextSecondary,
+                modifier = Modifier.padding(end = 6.dp)
+            )
+        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = DarkTextSecondary,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 
@@ -450,7 +978,7 @@ fun BackgroundTimerPermissionsDialog(
 
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
+        color = DarkBackground
     ) {
         Column(
             modifier = Modifier
@@ -461,35 +989,43 @@ fun BackgroundTimerPermissionsDialog(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Security, null, tint = CoralPrimary)
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("close_background_permissions_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                        contentDescription = s.cancel,
+                        tint = DarkTextPrimary,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+                Icon(Icons.Default.Security, null, tint = CoralPrimary, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = s.backgroundTimerPermissionsTitle,
-                    style = MaterialTheme.typography.headlineSmall,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
+                    color = DarkTextPrimary,
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.testTag("close_background_permissions_button")
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = s.cancel)
-                }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(color = DarkOutline)
 
             LazyColumn(
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
                     Text(
                         text = s.backgroundTimerPermissionsSubtitle,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontSize = 13.sp,
+                        color = DarkTextSecondary
                     )
                 }
 
@@ -508,7 +1044,7 @@ fun BackgroundTimerPermissionsDialog(
                     )
                 }
 
-                // Card 2: Allow auto-startup (OEM Auto-Start with Transsion/Infinix XOS support)
+                // Card 2: Allow auto-startup
                 item {
                     BackgroundPermissionActionCard(
                         icon = Icons.Default.PlayCircleOutline,
@@ -553,23 +1089,23 @@ fun BackgroundTimerPermissionsDialog(
                     )
                 }
 
-                // Card 5: Lock in recent apps (Interactive Confirmed / تم التثبيت toggle)
+                // Card 5: Lock in recent apps
                 item {
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp),
+                        color = DarkSurface,
                         border = BorderStroke(
                             1.dp,
-                            if (settings.lockedInRecentsConfirmed) ForestEmerald else MaterialTheme.colorScheme.outlineVariant
+                            if (settings.lockedInRecentsConfirmed) ForestEmerald else DarkOutline
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(RoundedCornerShape(12.dp))
                             .clickable { onToggleLockedInRecents(!settings.lockedInRecentsConfirmed) }
                             .testTag("card_lock_in_recent_apps")
                     ) {
                         Column(
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier.padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Row(
@@ -578,25 +1114,26 @@ fun BackgroundTimerPermissionsDialog(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(40.dp)
+                                        .size(38.dp)
                                         .clip(CircleShape)
-                                        .background( ForestEmerald.copy(alpha = 0.14f)),
+                                        .background(ForestEmerald.copy(alpha = 0.14f)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(Icons.Default.Lock, null, tint = ForestEmerald)
                                 }
                                 Text(
                                     text = s.cardLockInRecentsTitle,
-                                    style = MaterialTheme.typography.titleSmall,
+                                    fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
+                                    color = DarkTextPrimary,
                                     modifier = Modifier.weight(1f)
                                 )
                             }
 
                             Text(
                                 text = s.cardLockInRecentsDesc,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontSize = 12.sp,
+                                color = DarkTextSecondary
                             )
 
                             Row(
@@ -605,8 +1142,8 @@ fun BackgroundTimerPermissionsDialog(
                             ) {
                                 Text(
                                     text = s.confirmedLockedLabel,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = if (settings.lockedInRecentsConfirmed) ForestEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 13.sp,
+                                    color = if (settings.lockedInRecentsConfirmed) ForestEmerald else DarkTextSecondary,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -641,17 +1178,17 @@ private fun BackgroundPermissionActionCard(
     testTag: String
 ) {
     Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(12.dp),
+        color = DarkSurface,
+        border = BorderStroke(1.dp, DarkOutline),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .testTag(testTag)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
@@ -660,7 +1197,7 @@ private fun BackgroundPermissionActionCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
                         .background(iconTint.copy(alpha = 0.14f)),
                     contentAlignment = Alignment.Center
@@ -669,8 +1206,9 @@ private fun BackgroundPermissionActionCard(
                 }
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleSmall,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
+                    color = DarkTextPrimary,
                     modifier = Modifier.weight(1f)
                 )
                 if (statusText != null) {
@@ -679,8 +1217,8 @@ private fun BackgroundPermissionActionCard(
             }
             Text(
                 text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                fontSize = 12.sp,
+                color = DarkTextSecondary
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -689,7 +1227,7 @@ private fun BackgroundPermissionActionCard(
             ) {
                 Text(
                     text = actionLabel,
-                    style = MaterialTheme.typography.labelMedium,
+                    fontSize = 12.sp,
                     color = CoralPrimary,
                     fontWeight = FontWeight.Bold
                 )
@@ -698,7 +1236,7 @@ private fun BackgroundPermissionActionCard(
                     imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                     contentDescription = null,
                     tint = CoralPrimary,
-                    modifier = Modifier.size(15.dp)
+                    modifier = Modifier.size(14.dp)
                 )
             }
         }
@@ -714,7 +1252,7 @@ private fun PermissionStatusRow(
 ) {
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        color = DarkSurfaceVariant,
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
@@ -726,7 +1264,8 @@ private fun PermissionStatusRow(
         ) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 13.sp,
+                color = DarkTextPrimary,
                 modifier = Modifier.weight(1f)
             )
             StatusBadgePill(
@@ -750,37 +1289,11 @@ private fun StatusBadgePill(
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall,
+            fontSize = 11.sp,
             color = color,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
         )
-    }
-}
-
-@Composable
-private fun SettingsSectionCard(
-    title: String,
-    content: @Composable () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = CoralPrimary
-            )
-            content()
-        }
     }
 }
 
@@ -794,10 +1307,10 @@ private fun SettingsSliderRow(
 ) {
     Column {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(label, fontSize = 13.sp, color = DarkTextPrimary)
             Text(
                 text = "$value $unit".trim(),
-                style = MaterialTheme.typography.titleSmall,
+                fontSize = 13.sp,
                 fontFamily = JetBrainsMonoFontFamily,
                 color = CoralPrimary,
                 fontWeight = FontWeight.Bold
@@ -827,7 +1340,8 @@ private fun SettingsSwitchRow(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyMedium,
+            fontSize = 13.sp,
+            color = DarkTextPrimary,
             modifier = Modifier.weight(1f)
         )
         Switch(
@@ -856,13 +1370,14 @@ private fun SettingsSwitchWithSubtitleRow(
         Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 13.sp,
+                color = DarkTextPrimary,
                 fontWeight = FontWeight.SemiBold
             )
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                fontSize = 11.sp,
+                color = DarkTextSecondary
             )
         }
         Switch(

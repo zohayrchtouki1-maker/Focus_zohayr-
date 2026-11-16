@@ -1,6 +1,8 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,35 +24,37 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Alarm
-import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Flag
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material.icons.outlined.Alarm
+import androidx.compose.material.icons.outlined.CalendarToday
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.MoreTime
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,11 +63,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.DateUtils
 import com.example.i18n.Strings
 import com.example.i18n.label
@@ -73,7 +84,15 @@ import com.example.model.RecurrenceRule
 import com.example.model.TagItem
 import com.example.model.TaskItem
 import com.example.model.TaskPriority
+import com.example.ui.theme.CatTasksInboxBlue
+import com.example.ui.theme.CatTomorrowOrange
 import com.example.ui.theme.CoralPrimary
+import com.example.ui.theme.DarkIconMuted
+import com.example.ui.theme.DarkOutline
+import com.example.ui.theme.DarkSurface
+import com.example.ui.theme.DarkSurfaceVariant
+import com.example.ui.theme.DarkTextPrimary
+import com.example.ui.theme.DarkTextSecondary
 import com.example.ui.theme.ForestEmerald
 import com.example.ui.theme.JetBrainsMonoFontFamily
 
@@ -99,461 +118,794 @@ fun TaskInspectorPanel(
     val isArabic = language == AppLanguage.AR
     var newSubtaskTitle by remember { mutableStateOf("") }
     var showDatePicker by remember { mutableStateOf(false) }
+    var showPomodoroDialog by remember { mutableStateOf(false) }
+    var projectMenuOpen by remember { mutableStateOf(false) }
+    var priorityMenuOpen by remember { mutableStateOf(false) }
+    var tagsMenuOpen by remember { mutableStateOf(false) }
+    var repeatMenuOpen by remember { mutableStateOf(false) }
+    var reminderMenuOpen by remember { mutableStateOf(false) }
+    var expandPomodoroEditor by remember { mutableStateOf(false) }
+
+    val primaryTextColor = DarkTextPrimary
+    val secondaryTextColor = DarkTextSecondary
+    val cardBgColor = DarkSurface
+    val cardBorderColor = DarkOutline
+    val iconMutedColor = DarkIconMuted
+
+    val currentProject = projects.find { it.id == task.projectId }
+    val currentProjectLabel = currentProject?.name ?: s.noProject
+    val currentProjectColor = currentProject?.let { parseHexColor(it.colorHex) } ?: CatTasksInboxBlue
+
+    val unitPomodoroMins = task.customPomodoroMinutes ?: defaultPomodoroMinutes
+    val totalEstimatedMins = task.estimatedPomodoros * unitPomodoroMins
 
     Column(
         modifier = modifier
             .fillMaxHeight()
-            .background(MaterialTheme.colorScheme.surface)
+            .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        // Top Header
+        // Top bar: Right-aligned `>` back chevron + project dropdown "المهام ▾";
+        // left-aligned Play `▶`, Timer-plus, and Trash icons (20dp, #9E9EA9)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = s.taskInspector,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
-            if (!task.isCompleted) {
-                IconButton(onClick = onStartFocus, modifier = Modifier.testTag("inspector_play_button")) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = s.start, tint = CoralPrimary)
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier
+                    .size(40.dp)
+                    .testTag("inspector_close_button")
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    contentDescription = s.cancel,
+                    tint = primaryTextColor,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+
+            // Project dropdown "المهام ▾"
+            Box(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { projectMenuOpen = true }
+                        .padding(horizontal = 6.dp, vertical = 6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(currentProjectColor)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = currentProjectLabel,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = primaryTextColor
+                    )
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Icon(
+                        imageVector = Icons.Default.ArrowDropDown,
+                        contentDescription = null,
+                        tint = secondaryTextColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = projectMenuOpen,
+                    onDismissRequest = { projectMenuOpen = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(s.noProject) },
+                        leadingIcon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(CatTasksInboxBlue)
+                            )
+                        },
+                        onClick = {
+                            onUpdateTask { it.copy(projectId = null) }
+                            projectMenuOpen = false
+                        }
+                    )
+                    projects.filter { !it.isArchived }.forEach { proj ->
+                        DropdownMenuItem(
+                            text = { Text(proj.name) },
+                            leadingIcon = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(parseHexColor(proj.colorHex))
+                                )
+                            },
+                            onClick = {
+                                onUpdateTask { it.copy(projectId = proj.id) }
+                                projectMenuOpen = false
+                            }
+                        )
+                    }
                 }
             }
-            IconButton(onClick = onClose, modifier = Modifier.testTag("inspector_close_button")) {
-                Icon(Icons.Default.Close, contentDescription = s.cancel)
+
+            // Left-aligned Play ▶, Timer-plus, and Trash icons (20dp, #9E9EA9)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                if (!task.isCompleted) {
+                    IconButton(
+                        onClick = onStartFocus,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .testTag("inspector_play_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.PlayArrow,
+                            contentDescription = s.start,
+                            tint = iconMutedColor,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = { showPomodoroDialog = true },
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.MoreTime,
+                        contentDescription = s.pomodoroProgress,
+                        tint = iconMutedColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onDeleteTask,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("inspector_delete_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Delete,
+                        contentDescription = s.deleteTask,
+                        tint = iconMutedColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         Column(
             modifier = Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Complete Checkbox + Title
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(if (task.isCompleted) task.priority.color() else Color.Transparent)
-                        .border(2.dp, task.priority.color(), CircleShape)
-                        .clickable(onClick = onToggleComplete),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (task.isCompleted) {
-                        Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                    }
-                }
-                OutlinedTextField(
-                    value = task.title,
-                    onValueChange = { newTitle -> onUpdateTask { it.copy(title = newTitle) } },
-                    label = { Text(s.taskTitle) },
-                    singleLine = false,
-                    maxLines = 3,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            // Priority Flag Selector
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(s.priority, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TaskPriority.entries.forEach { p ->
-                        val isSelected = task.priority == p
-                        val pColor = p.color()
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (isSelected) pColor.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            border = if (isSelected) BorderStroke(1.5.dp, pColor) else null,
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { onUpdateTask { it.copy(priority = p) } }
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            ) {
-                                Icon(Icons.Default.Flag, null, tint = pColor, modifier = Modifier.size(16.dp))
-                                Text(p.label(s), style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Pomodoro Progress & Estimate Editor
+            // Card 1 (#1C1C21, 12dp radius): Task title next to completion circle,
+            // priority flag icon on left, dashed-border pill button "+ الوسوم" below title
             Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(12.dp),
+                color = cardBgColor,
+                border = BorderStroke(1.dp, cardBorderColor),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = s.pomodoroProgress,
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            text = "${task.completedPomodoros} / ${task.estimatedPomodoros}",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontFamily = JetBrainsMonoFontFamily,
-                            color = CoralPrimary,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        // Completed adjust
-                        StepperControl(
-                            label = s.completed,
-                            value = task.completedPomodoros,
-                            onDecrement = {
-                                onUpdateTask { it.copy(completedPomodoros = (it.completedPomodoros - 1).coerceAtLeast(0)) }
-                            },
-                            onIncrement = {
-                                onUpdateTask { it.copy(completedPomodoros = it.completedPomodoros + 1) }
-                            }
-                        )
-                        // Estimated adjust
-                        StepperControl(
-                            label = s.tomatoesLabel,
-                            value = task.estimatedPomodoros,
-                            onDecrement = {
-                                onUpdateTask { it.copy(estimatedPomodoros = (it.estimatedPomodoros - 1).coerceAtLeast(1)) }
-                            },
-                            onIncrement = {
-                                onUpdateTask { it.copy(estimatedPomodoros = (it.estimatedPomodoros + 1).coerceAtMost(20)) }
-                            }
-                        )
-                    }
-
-                    // Custom Pomodoro Duration
-                    val currentDur = task.customPomodoroMinutes ?: defaultPomodoroMinutes
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = s.customDurationMin,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(
-                            onClick = {
-                                onUpdateTask { it.copy(customPomodoroMinutes = (currentDur - 5).coerceAtLeast(5)) }
-                            },
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            Icon(Icons.Default.Remove, null, modifier = Modifier.size(18.dp))
+                        val checkboxColor = if (task.priority != TaskPriority.NONE) {
+                            task.priority.color()
+                        } else {
+                            secondaryTextColor
                         }
-                        Text(
-                            text = "$currentDur ${s.minutesShort}",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontFamily = JetBrainsMonoFontFamily
-                        )
-                        IconButton(
-                            onClick = {
-                                onUpdateTask { it.copy(customPomodoroMinutes = (currentDur + 5).coerceAtMost(120)) }
-                            },
-                            modifier = Modifier.size(34.dp)
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (task.isCompleted) checkboxColor.copy(alpha = 0.85f) else Color.Transparent
+                                )
+                                .border(1.6.dp, checkboxColor, CircleShape)
+                                .clickable(onClick = onToggleComplete),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                            if (task.isCompleted) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        BasicTextField(
+                            value = task.title,
+                            onValueChange = { newTitle -> onUpdateTask { it.copy(title = newTitle) } },
+                            textStyle = TextStyle(
+                                color = if (task.isCompleted) secondaryTextColor else primaryTextColor,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Medium,
+                                textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                            ),
+                            cursorBrush = SolidColor(CoralPrimary),
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        // Priority flag icon on left (end in RTL)
+                        Box {
+                            IconButton(
+                                onClick = { priorityMenuOpen = true },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (task.priority == TaskPriority.NONE) Icons.Outlined.Flag else Icons.Default.Flag,
+                                    contentDescription = s.priority,
+                                    tint = if (task.priority == TaskPriority.NONE) secondaryTextColor else task.priority.color(),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = priorityMenuOpen,
+                                onDismissRequest = { priorityMenuOpen = false }
+                            ) {
+                                TaskPriority.entries.forEach { p ->
+                                    DropdownMenuItem(
+                                        text = { Text(p.label(s)) },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Flag, null, tint = p.color())
+                                        },
+                                        onClick = {
+                                            onUpdateTask { it.copy(priority = p) }
+                                            priorityMenuOpen = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Dashed-border pill button "+ الوسوم" below title + assigned tags
+                    Box {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(start = 34.dp)
+                        ) {
+                            val assignedTags = tags.filter { task.tagIds.contains(it.id) }
+                            assignedTags.forEach { tag ->
+                                val tColor = parseHexColor(tag.colorHex)
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = tColor.copy(alpha = 0.16f),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .clickable {
+                                            onUpdateTask { it.copy(tagIds = it.tagIds - tag.id) }
+                                        }
+                                ) {
+                                    Text(
+                                        text = "#${tag.name} ✕",
+                                        fontSize = 11.sp,
+                                        color = tColor,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            // Dashed-border pill button "+ الوسوم"
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .clickable { tagsMenuOpen = true }
+                            ) {
+                                Canvas(modifier = Modifier.matchParentSize()) {
+                                    drawRoundRect(
+                                        color = secondaryTextColor.copy(alpha = 0.55f),
+                                        cornerRadius = CornerRadius(size.height / 2f, size.height / 2f),
+                                        style = Stroke(
+                                            width = 1.dp.toPx(),
+                                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
+                                        )
+                                    )
+                                }
+                                Text(
+                                    text = if (isArabic) "+ الوسوم" else "+ ${s.tags}",
+                                    fontSize = 11.sp,
+                                    color = secondaryTextColor,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = tagsMenuOpen,
+                            onDismissRequest = { tagsMenuOpen = false }
+                        ) {
+                            tags.forEach { tag ->
+                                val selected = task.tagIds.contains(tag.id)
+                                DropdownMenuItem(
+                                    text = { Text("#${tag.name}") },
+                                    trailingIcon = {
+                                        if (selected) Icon(Icons.Default.Check, null, tint = CoralPrimary)
+                                    },
+                                    onClick = {
+                                        onUpdateTask {
+                                            val next = if (selected) it.tagIds - tag.id else it.tagIds + tag.id
+                                            it.copy(tagIds = next)
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            // Subtasks Checklist
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "${s.subtasks} (${task.subtasks.count { it.isDone }}/${task.subtasks.size})",
-                    style = MaterialTheme.typography.titleSmall
-                )
-                task.subtasks.forEach { sub ->
+            // Card 2 (#1C1C21, 12dp radius): Structured rows for
+            // "بومودورو" (tomato icons + "= 60 د"), "تاريخ الاستحقاق" ("غدًا ⊗" pill badge),
+            // "التذكير" ("لا يوجد"), "التكرار" ("لا يوجد")
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = cardBgColor,
+                border = BorderStroke(1.dp, cardBorderColor),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Row 1: بومودورو
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { expandPomodoroEditor = !expandPomodoroEditor }
+                            .padding(horizontal = 14.dp, vertical = 14.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            TomatoIcon(filled = false, size = 18.dp, tint = secondaryTextColor)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = s.pomodoroProgress,
+                                fontSize = 15.sp,
+                                color = primaryTextColor,
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            // Tomato icons + "= 60 د" on left
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Text(
+                                    text = "${task.completedPomodoros}/",
+                                    fontSize = 12.sp,
+                                    color = secondaryTextColor
+                                )
+                                val countIcons = task.estimatedPomodoros.coerceIn(1, 5)
+                                for (i in 1..countIcons) {
+                                    TomatoIcon(
+                                        filled = i <= task.completedPomodoros || task.completedPomodoros == 0,
+                                        size = 13.dp,
+                                        tint = CoralPrimary
+                                    )
+                                }
+                                if (task.estimatedPomodoros > 5) {
+                                    Text(
+                                        text = "+${task.estimatedPomodoros - 5}",
+                                        fontSize = 11.sp,
+                                        color = CoralPrimary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "= $totalEstimatedMins ${s.minutesShort}",
+                                    fontSize = 12.sp,
+                                    color = secondaryTextColor
+                                )
+                            }
+                        }
+
+                        AnimatedVisibility(visible = expandPomodoroEditor) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    StepperControl(
+                                        label = s.tomatoesLabel,
+                                        value = task.estimatedPomodoros,
+                                        onDecrement = {
+                                            onUpdateTask { it.copy(estimatedPomodoros = (it.estimatedPomodoros - 1).coerceAtLeast(1)) }
+                                        },
+                                        onIncrement = {
+                                            onUpdateTask { it.copy(estimatedPomodoros = (it.estimatedPomodoros + 1).coerceAtMost(20)) }
+                                        }
+                                    )
+                                    StepperControl(
+                                        label = s.completed,
+                                        value = task.completedPomodoros,
+                                        onDecrement = {
+                                            onUpdateTask { it.copy(completedPomodoros = (it.completedPomodoros - 1).coerceAtLeast(0)) }
+                                        },
+                                        onIncrement = {
+                                            onUpdateTask { it.copy(completedPomodoros = it.completedPomodoros + 1) }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = cardBorderColor, thickness = 0.8.dp)
+
+                    // Row 2: تاريخ الاستحقاق
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showDatePicker = true }
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CalendarToday,
+                            contentDescription = null,
+                            tint = secondaryTextColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = s.dueDate,
+                            fontSize = 15.sp,
+                            color = primaryTextColor,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        if (task.dueDateEpochDay != null || task.isSomeday) {
+                            val dateStr = if (task.isSomeday) {
+                                s.someday
+                            } else {
+                                DateUtils.formatEpochDay(task.dueDateEpochDay!!, isArabic)
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = CatTomorrowOrange
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = dateStr,
+                                        fontSize = 12.sp,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.Cancel,
+                                        contentDescription = s.clearDate,
+                                        tint = Color.White.copy(alpha = 0.9f),
+                                        modifier = Modifier
+                                            .size(15.dp)
+                                            .clickable {
+                                                onUpdateTask {
+                                                    it.copy(
+                                                        dueDateEpochDay = null,
+                                                        reminderTime = null,
+                                                        isSomeday = false
+                                                    )
+                                                }
+                                            }
+                                    )
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = s.repeatNone,
+                                fontSize = 13.sp,
+                                color = secondaryTextColor
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = cardBorderColor, thickness = 0.8.dp)
+
+                    // Row 3: التذكير
+                    Box {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { reminderMenuOpen = true }
+                                .padding(horizontal = 14.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Alarm,
+                                contentDescription = null,
+                                tint = secondaryTextColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = s.reminder,
+                                fontSize = 15.sp,
+                                color = primaryTextColor,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = task.reminderTime ?: s.repeatNone,
+                                fontSize = 13.sp,
+                                color = if (task.reminderTime != null) CoralPrimary else secondaryTextColor
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = reminderMenuOpen,
+                            onDismissRequest = { reminderMenuOpen = false }
+                        ) {
+                            val today = DateUtils.todayEpochDay()
+                            DropdownMenuItem(
+                                text = { Text(if (isArabic) "بعد 15 دقيقة" else "In 15 minutes") },
+                                onClick = {
+                                    val cal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.MINUTE, 15) }
+                                    val d = DateUtils.epochDayFromMillis(cal.timeInMillis)
+                                    val t = "%02d:%02d".format(cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE))
+                                    onUpdateTask { it.copy(dueDateEpochDay = d, reminderTime = t, isSomeday = false) }
+                                    reminderMenuOpen = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (isArabic) "غدًا 09:00" else "Tomorrow 09:00") },
+                                onClick = {
+                                    onUpdateTask { it.copy(dueDateEpochDay = today + 1, reminderTime = "09:00", isSomeday = false) }
+                                    reminderMenuOpen = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (isArabic) "تحديد وقت مخصص..." else "Pick custom time...") },
+                                onClick = {
+                                    reminderMenuOpen = false
+                                    showDatePicker = true
+                                }
+                            )
+                            if (task.reminderTime != null) {
+                                DropdownMenuItem(
+                                    text = { Text(s.repeatNone) },
+                                    onClick = {
+                                        onUpdateTask { it.copy(reminderTime = null) }
+                                        reminderMenuOpen = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = cardBorderColor, thickness = 0.8.dp)
+
+                    // Row 4: التكرار
+                    Box {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { repeatMenuOpen = true }
+                                .padding(horizontal = 14.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Repeat,
+                                contentDescription = null,
+                                tint = secondaryTextColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = s.repeat,
+                                fontSize = 15.sp,
+                                color = primaryTextColor,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = task.recurrence.label(s),
+                                fontSize = 13.sp,
+                                color = if (task.recurrence != RecurrenceRule.NONE) ForestEmerald else secondaryTextColor
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = repeatMenuOpen,
+                            onDismissRequest = { repeatMenuOpen = false }
+                        ) {
+                            RecurrenceRule.entries.forEach { rule ->
+                                DropdownMenuItem(
+                                    text = { Text(rule.label(s)) },
+                                    onClick = {
+                                        onUpdateTask { it.copy(recurrence = rule) }
+                                        repeatMenuOpen = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Card 3 (#1C1C21, 12dp radius): "+ إضافة مهمة فرعية..." row + existing subtasks
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = cardBgColor,
+                border = BorderStroke(1.dp, cardBorderColor),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    task.subtasks.forEach { sub ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggleSubtask(sub.id) }
+                                .padding(horizontal = 14.dp, vertical = 12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(CircleShape)
+                                    .background(if (sub.isDone) ForestEmerald else Color.Transparent)
+                                    .border(
+                                        1.5.dp,
+                                        if (sub.isDone) ForestEmerald else secondaryTextColor,
+                                        CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (sub.isDone) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = sub.title,
+                                fontSize = 14.sp,
+                                modifier = Modifier.weight(1f),
+                                color = if (sub.isDone) secondaryTextColor else primaryTextColor,
+                                textDecoration = if (sub.isDone) TextDecoration.LineThrough else TextDecoration.None
+                            )
+                            IconButton(
+                                onClick = { onDeleteSubtask(sub.id) },
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    null,
+                                    tint = secondaryTextColor,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
+                        HorizontalDivider(color = cardBorderColor, thickness = 0.8.dp)
+                    }
+
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                            .clickable { onToggleSubtask(sub.id) }
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .padding(horizontal = 14.dp, vertical = 14.dp)
                     ) {
-                        Box(
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = s.add,
+                            tint = secondaryTextColor,
                             modifier = Modifier
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .background(if (sub.isDone) ForestEmerald else Color.Transparent)
-                                .border(1.5.dp, if (sub.isDone) ForestEmerald else MaterialTheme.colorScheme.onSurfaceVariant, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (sub.isDone) Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(12.dp))
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = sub.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f),
-                            color = if (sub.isDone) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
-                        )
-                        IconButton(
-                            onClick = { onDeleteSubtask(sub.id) },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(Icons.Default.Close, null, modifier = Modifier.size(15.dp))
-                        }
-                    }
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    OutlinedTextField(
-                        value = newSubtaskTitle,
-                        onValueChange = { newSubtaskTitle = it },
-                        placeholder = { Text(s.addSubtaskPlaceholder) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            if (newSubtaskTitle.isNotBlank()) {
-                                onAddSubtask(newSubtaskTitle)
-                                newSubtaskTitle = ""
-                            }
-                        }),
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(
-                        onClick = {
-                            if (newSubtaskTitle.isNotBlank()) {
-                                onAddSubtask(newSubtaskTitle)
-                                newSubtaskTitle = ""
-                            }
-                        }
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = s.add, tint = CoralPrimary)
-                    }
-                }
-            }
-
-            // Scheduling: Due Date, Reminder, Repeat
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(s.dueDate, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                val today = DateUtils.todayEpochDay()
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    ScheduleChip(
-                        label = s.today,
-                        selected = !task.isSomeday && task.dueDateEpochDay == today,
-                        onClick = { onUpdateTask { it.copy(dueDateEpochDay = today, isSomeday = false) } }
-                    )
-                    ScheduleChip(
-                        label = s.tomorrow,
-                        selected = !task.isSomeday && task.dueDateEpochDay == today + 1,
-                        onClick = { onUpdateTask { it.copy(dueDateEpochDay = today + 1, isSomeday = false) } }
-                    )
-                    ScheduleChip(
-                        label = s.someday,
-                        selected = task.isSomeday,
-                        onClick = { onUpdateTask { it.copy(dueDateEpochDay = null, reminderTime = null, isSomeday = true) } }
-                    )
-                    val customDateTimeLabel = if (task.dueDateEpochDay != null) {
-                        val d = DateUtils.formatEpochDay(task.dueDateEpochDay, isArabic)
-                        if (!task.reminderTime.isNullOrBlank()) "$d • ${task.reminderTime}" else d
-                    } else {
-                        s.customDate
-                    }
-                    ScheduleChip(
-                        label = customDateTimeLabel,
-                        selected = task.dueDateEpochDay != null && !task.reminderTime.isNullOrBlank(),
-                        icon = Icons.Default.CalendarToday,
-                        onClick = { showDatePicker = true }
-                    )
-                    if (task.dueDateEpochDay != null || task.isSomeday || task.reminderTime != null) {
-                        ScheduleChip(
-                            label = s.clearDate,
-                            selected = false,
-                            onClick = { onUpdateTask { it.copy(dueDateEpochDay = null, reminderTime = null, isSomeday = false) } }
-                        )
-                    }
-                }
-
-                // Reminder Time quick chips + Unified Date/Time Picker trigger
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(Icons.Default.Alarm, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                    Text(s.reminder, style = MaterialTheme.typography.labelMedium)
-                }
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    ScheduleChip(
-                        label = if (isArabic) "بعد 15 د" else "In 15m",
-                        selected = false,
-                        onClick = {
-                            val cal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.MINUTE, 15) }
-                            val d = DateUtils.epochDayFromMillis(cal.timeInMillis)
-                            val t = "%02d:%02d".format(cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE))
-                            onUpdateTask { it.copy(dueDateEpochDay = d, reminderTime = t, isSomeday = false) }
-                        }
-                    )
-                    ScheduleChip(
-                        label = if (isArabic) "بعد ساعة" else "In 1h",
-                        selected = false,
-                        onClick = {
-                            val cal = java.util.Calendar.getInstance().apply { add(java.util.Calendar.HOUR_OF_DAY, 1) }
-                            val d = DateUtils.epochDayFromMillis(cal.timeInMillis)
-                            val t = "%02d:%02d".format(cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE))
-                            onUpdateTask { it.copy(dueDateEpochDay = d, reminderTime = t, isSomeday = false) }
-                        }
-                    )
-                    ScheduleChip(
-                        label = if (isArabic) "غداً 9:00" else "Tomorrow 9:00",
-                        selected = task.dueDateEpochDay == today + 1 && task.reminderTime == "09:00",
-                        onClick = {
-                            onUpdateTask { it.copy(dueDateEpochDay = today + 1, reminderTime = "09:00", isSomeday = false) }
-                        }
-                    )
-                    ScheduleChip(
-                        label = task.reminderTime ?: (if (isArabic) "تحديد وقت ⏰" else "Pick Time ⏰"),
-                        selected = task.reminderTime != null,
-                        onClick = { showDatePicker = true }
-                    )
-                    if (task.reminderTime != null) {
-                        ScheduleChip(
-                            label = s.priorityNone,
-                            selected = false,
-                            onClick = { onUpdateTask { it.copy(reminderTime = null) } }
-                        )
-                    }
-                }
-
-                // Repeat Rule
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(Icons.Default.Repeat, null, modifier = Modifier.size(16.dp), tint = ForestEmerald)
-                    Text(s.repeat, style = MaterialTheme.typography.labelMedium)
-                }
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    RecurrenceRule.entries.forEach { rule ->
-                        ScheduleChip(
-                            label = rule.label(s),
-                            selected = task.recurrence == rule,
-                            onClick = { onUpdateTask { it.copy(recurrence = rule) } }
-                        )
-                    }
-                }
-            }
-
-            // Organization: Project & Tags
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(s.project, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    ScheduleChip(
-                        label = s.noProject,
-                        selected = task.projectId == null,
-                        onClick = { onUpdateTask { it.copy(projectId = null) } }
-                    )
-                    projects.filter { !it.isArchived }.forEach { proj ->
-                        ScheduleChip(
-                            label = proj.name,
-                            selected = task.projectId == proj.id,
-                            accent = parseHexColor(proj.colorHex),
-                            onClick = { onUpdateTask { it.copy(projectId = proj.id) } }
-                        )
-                    }
-                }
-
-                Text(s.tags, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    tags.forEach { tag ->
-                        val selected = task.tagIds.contains(tag.id)
-                        ScheduleChip(
-                            label = "#${tag.name}",
-                            selected = selected,
-                            accent = parseHexColor(tag.colorHex),
-                            onClick = {
-                                onUpdateTask {
-                                    val next = if (selected) it.tagIds - tag.id else it.tagIds + tag.id
-                                    it.copy(tagIds = next)
+                                .size(18.dp)
+                                .clickable {
+                                    if (newSubtaskTitle.isNotBlank()) {
+                                        onAddSubtask(newSubtaskTitle)
+                                        newSubtaskTitle = ""
+                                    }
                                 }
-                            }
                         )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (newSubtaskTitle.isEmpty()) {
+                                Text(
+                                    text = if (isArabic) "إضافة مهمة فرعية..." else "Add a subtask...",
+                                    fontSize = 14.sp,
+                                    color = secondaryTextColor
+                                )
+                            }
+                            BasicTextField(
+                                value = newSubtaskTitle,
+                                onValueChange = { newSubtaskTitle = it },
+                                singleLine = true,
+                                textStyle = TextStyle(
+                                    color = primaryTextColor,
+                                    fontSize = 14.sp
+                                ),
+                                cursorBrush = SolidColor(CoralPrimary),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = {
+                                    if (newSubtaskTitle.isNotBlank()) {
+                                        onAddSubtask(newSubtaskTitle)
+                                        newSubtaskTitle = ""
+                                    }
+                                }),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
             }
 
-            // Auto-saving Notes
-            OutlinedTextField(
-                value = task.notes,
-                onValueChange = { notes -> onUpdateTask { it.copy(notes = notes) } },
-                label = { Text(s.notes) },
-                placeholder = { Text(s.notesPlaceholder) },
-                minLines = 4,
-                maxLines = 8,
+            // Card 4 (#1C1C21, 12dp radius): Multiline "إضافة ملاحظة..." card
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = cardBgColor,
+                border = BorderStroke(1.dp, cardBorderColor),
                 modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        // Footer: Creation Timestamp + Delete Button
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "${s.createdAt}: ${DateUtils.formatDateTime(task.createdAtEpochMillis, isArabic)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
-            )
-            OutlinedButton(
-                onClick = onDeleteTask,
-                shape = RoundedCornerShape(percent = 50),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
-                modifier = Modifier.testTag("inspector_delete_button")
             ) {
-                Icon(Icons.Default.Delete, null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(s.deleteTask)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 14.dp)
+                ) {
+                    if (task.notes.isEmpty()) {
+                        Text(
+                            text = s.notesPlaceholder,
+                            fontSize = 14.sp,
+                            color = secondaryTextColor
+                        )
+                    }
+                    BasicTextField(
+                        value = task.notes,
+                        onValueChange = { notes -> onUpdateTask { it.copy(notes = notes) } },
+                        textStyle = TextStyle(
+                            color = primaryTextColor,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp
+                        ),
+                        cursorBrush = SolidColor(CoralPrimary),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(84.dp)
+                    )
+                }
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 
@@ -575,79 +927,102 @@ fun TaskInspectorPanel(
             }
         )
     }
+
+    if (showPomodoroDialog) {
+        val currentDur = task.customPomodoroMinutes ?: defaultPomodoroMinutes
+        AlertDialog(
+            onDismissRequest = { showPomodoroDialog = false },
+            title = { Text(s.pomodoroProgress) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    StepperControl(
+                        label = s.tomatoesLabel,
+                        value = task.estimatedPomodoros,
+                        onDecrement = {
+                            onUpdateTask { it.copy(estimatedPomodoros = (it.estimatedPomodoros - 1).coerceAtLeast(1)) }
+                        },
+                        onIncrement = {
+                            onUpdateTask { it.copy(estimatedPomodoros = (it.estimatedPomodoros + 1).coerceAtMost(20)) }
+                        }
+                    )
+                    StepperControl(
+                        label = s.completed,
+                        value = task.completedPomodoros,
+                        onDecrement = {
+                            onUpdateTask { it.copy(completedPomodoros = (it.completedPomodoros - 1).coerceAtLeast(0)) }
+                        },
+                        onIncrement = {
+                            onUpdateTask { it.copy(completedPomodoros = it.completedPomodoros + 1) }
+                        }
+                    )
+                    StepperControl(
+                        label = s.customDurationMin,
+                        value = currentDur,
+                        step = 5,
+                        onDecrement = {
+                            onUpdateTask { it.copy(customPomodoroMinutes = (currentDur - 5).coerceAtLeast(5)) }
+                        },
+                        onIncrement = {
+                            onUpdateTask { it.copy(customPomodoroMinutes = (currentDur + 5).coerceAtMost(120)) }
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPomodoroDialog = false }) {
+                    Text(s.save, color = CoralPrimary)
+                }
+            }
+        )
+    }
 }
 
 @Composable
 private fun StepperControl(
     label: String,
     value: Int,
+    step: Int = 1,
     onDecrement: () -> Unit,
     onIncrement: () -> Unit
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 6.dp))
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            color = DarkTextSecondary,
+            modifier = Modifier.padding(end = 8.dp)
+        )
         Surface(
             shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surface,
+            color = DarkSurfaceVariant,
             modifier = Modifier
-                .size(30.dp)
+                .size(28.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .clickable(onClick = onDecrement)
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.Remove, null, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Remove, null, tint = DarkTextPrimary, modifier = Modifier.size(15.dp))
             }
         }
         Text(
             text = value.toString(),
-            style = MaterialTheme.typography.titleSmall,
+            fontSize = 14.sp,
+            color = CoralPrimary,
+            fontWeight = FontWeight.Bold,
             fontFamily = JetBrainsMonoFontFamily,
             modifier = Modifier.padding(horizontal = 10.dp)
         )
         Surface(
             shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surface,
+            color = DarkSurfaceVariant,
             modifier = Modifier
-                .size(30.dp)
+                .size(28.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .clickable(onClick = onIncrement)
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Add, null, tint = DarkTextPrimary, modifier = Modifier.size(15.dp))
             }
-        }
-    }
-}
-
-@Composable
-private fun ScheduleChip(
-    label: String,
-    selected: Boolean,
-    accent: Color = CoralPrimary,
-    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = if (selected) accent.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-        border = if (selected) BorderStroke(1.5.dp, accent) else null,
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-        ) {
-            if (icon != null) {
-                Icon(icon, null, tint = if (selected) accent else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-            }
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (selected) accent else MaterialTheme.colorScheme.onSurface
-            )
         }
     }
 }

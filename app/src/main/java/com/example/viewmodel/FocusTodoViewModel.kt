@@ -4,11 +4,10 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.audio.SoundSynthesizer
-import com.example.data.CloudSyncStatus
+import com.example.data.BackupImportMode
 import com.example.data.DateUtils
 import com.example.data.FocusRepository
 import com.example.data.SeedData
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.example.model.AppBackupState
 import com.example.model.AppLanguage
 import com.example.model.AppSettings
@@ -70,22 +69,17 @@ data class TimerUiState(
 data class MainUiState(
     val isLoaded: Boolean = false,
     val data: AppBackupState = AppBackupState(),
-    val destination: NavDestination = NavDestination.SmartList(SmartListType.TODAY),
+    val destination: NavDestination = NavDestination.SmartList(SmartListType.INBOX),
     val sortOption: TaskSortOption = TaskSortOption.PRIORITY,
-    val showCompletedAccordion: Boolean = true,
+    val showCompletedAccordion: Boolean = false,
     val selectedTaskId: String? = null,
+    val showHomeScreenOnCompact: Boolean = true,
+    val showCalendar: Boolean = false,
     val showFullScreenTimer: Boolean = false,
     val showReports: Boolean = false,
     val showForest: Boolean = false,
     val showSettings: Boolean = false,
     val showBackgroundPermissionsModal: Boolean = false,
-    val showAuthScreen: Boolean = false,
-    val currentUserEmail: String? = null,
-    val currentUserId: String? = null,
-    val cloudSyncStatus: CloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED,
-    val cloudSyncErrorMessage: String? = null,
-    val isAuthLoading: Boolean = false,
-    val authErrorMessage: String? = null,
     val timer: TimerUiState = TimerUiState(),
     val systemPermissions: SystemPermissionSnapshot = SystemPermissionSnapshot(),
     val permissionRequestTrigger: Int = 0,
@@ -106,26 +100,19 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         FocusNotificationManager.ensureChannelsCreated(appContext)
 
         viewModelScope.launch {
-            val activeSession = repository.getActiveSessionSync()
-            val loaded = repository.loadState()
+            val rawLoaded = repository.loadState()
+            val loaded = rawLoaded.copy(
+                settings = rawLoaded.settings.copy(darkTheme = true)
+            )
             val defaultFocusSecs = loaded.settings.pomodoroMinutes * 60
             val restoredTimer = restorePersistedTimer(loaded.persistedTimer, defaultFocusSecs)
             val permSnapshot = SystemPermissionsHelper.getSnapshot(appContext)
             val shouldPromptOnLaunch = !permSnapshot.notificationsGranted
-            val initialSyncStatus = if (activeSession != null) {
-                CloudSyncStatus.SYNCING
-            } else {
-                CloudSyncStatus.UNAUTHENTICATED
-            }
 
             _uiState.update {
                 it.copy(
                     isLoaded = true,
                     data = loaded,
-                    currentUserEmail = activeSession?.email,
-                    currentUserId = activeSession?.userId,
-                    cloudSyncStatus = initialSyncStatus,
-                    cloudSyncErrorMessage = null,
                     timer = restoredTimer,
                     systemPermissions = permSnapshot,
                     permissionRequestTrigger = if (shouldPromptOnLaunch) it.permissionRequestTrigger + 1 else it.permissionRequestTrigger
@@ -145,10 +132,6 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 if (_uiState.value.timer.isRunning) {
                     startTimerTicker()
                 }
-            }
-
-            if (activeSession != null) {
-                manualCloudSync()
             }
         }
 
@@ -218,70 +201,21 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             val nextData = transform(state.data).copy(
                 persistedTimer = state.timer.toPersisted()
             )
-            val isSignedIn = state.currentUserEmail != null
             viewModelScope.launch {
-                val res = repository.saveState(nextData)
-                if (_uiState.value.currentUserEmail != null) {
-                    if (res.isSuccess) {
-                        _uiState.update {
-                            it.copy(
-                                cloudSyncStatus = CloudSyncStatus.SYNCED,
-                                cloudSyncErrorMessage = null
-                            )
-                        }
-                    } else {
-                        val err = res.exceptionOrNull()?.localizedMessage
-                            ?: res.exceptionOrNull()?.message
-                            ?: "Google Drive AppData sync failed"
-                        _uiState.update {
-                            it.copy(
-                                cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
-                                cloudSyncErrorMessage = err
-                            )
-                        }
-                    }
-                }
+                repository.saveState(nextData)
             }
-            state.copy(
-                data = nextData,
-                cloudSyncStatus = if (isSignedIn) CloudSyncStatus.SYNCING else state.cloudSyncStatus,
-                cloudSyncErrorMessage = if (isSignedIn) null else state.cloudSyncErrorMessage
-            )
+            state.copy(data = nextData)
         }
     }
 
     private fun saveCurrentTimerToStorage() {
         val state = _uiState.value
         val nextData = state.data.copy(persistedTimer = state.timer.toPersisted())
-        val isSignedIn = state.currentUserEmail != null
         _uiState.update {
-            it.copy(
-                data = nextData,
-                cloudSyncStatus = if (isSignedIn) CloudSyncStatus.SYNCING else it.cloudSyncStatus
-            )
+            it.copy(data = nextData)
         }
         viewModelScope.launch {
-            val res = repository.saveState(nextData)
-            if (_uiState.value.currentUserEmail != null) {
-                if (res.isSuccess) {
-                    _uiState.update {
-                        it.copy(
-                            cloudSyncStatus = CloudSyncStatus.SYNCED,
-                            cloudSyncErrorMessage = null
-                        )
-                    }
-                } else {
-                    val err = res.exceptionOrNull()?.localizedMessage
-                        ?: res.exceptionOrNull()?.message
-                        ?: "Google Drive AppData sync failed"
-                    _uiState.update {
-                        it.copy(
-                            cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
-                            cloudSyncErrorMessage = err
-                        )
-                    }
-                }
-            }
+            repository.saveState(nextData)
         }
     }
 
@@ -301,13 +235,24 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun onAppResumed() {
         refreshSystemPermissions()
         reconcileRunningTimerWithTimestamp()
-        if (_uiState.value.currentUserEmail != null) {
-            manualCloudSync()
-        }
     }
 
     fun selectDestination(dest: NavDestination) {
-        _uiState.update { it.copy(destination = dest, selectedTaskId = null) }
+        _uiState.update {
+            it.copy(
+                destination = dest,
+                selectedTaskId = null,
+                showHomeScreenOnCompact = false
+            )
+        }
+    }
+
+    fun setShowHomeScreenOnCompact(show: Boolean) {
+        _uiState.update { it.copy(showHomeScreenOnCompact = show, selectedTaskId = null) }
+    }
+
+    fun setShowCalendar(show: Boolean) {
+        _uiState.update { it.copy(showCalendar = show) }
     }
 
     fun setSortOption(option: TaskSortOption) {
@@ -342,155 +287,6 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun setShowBackgroundPermissionsModal(show: Boolean) {
         if (show) refreshSystemPermissions()
         _uiState.update { it.copy(showBackgroundPermissionsModal = show) }
-    }
-
-    fun setShowAuthScreen(show: Boolean) {
-        _uiState.update { it.copy(showAuthScreen = show, authErrorMessage = null) }
-    }
-
-    fun clearAuthError() {
-        _uiState.update { it.copy(authErrorMessage = null) }
-    }
-
-    fun getGoogleSignInIntent() = repository.getGoogleSignInIntent()
-
-    fun onGoogleSignInStarted() {
-        _uiState.update {
-            it.copy(
-                isAuthLoading = true,
-                authErrorMessage = null,
-                cloudSyncStatus = CloudSyncStatus.SYNCING,
-                cloudSyncErrorMessage = null
-            )
-        }
-    }
-
-    fun onGoogleSignInResult(account: GoogleSignInAccount) {
-        _uiState.update {
-            it.copy(
-                isAuthLoading = true,
-                authErrorMessage = null,
-                cloudSyncStatus = CloudSyncStatus.SYNCING,
-                cloudSyncErrorMessage = null
-            )
-        }
-        viewModelScope.launch {
-            val result = repository.handleGoogleSignInSuccess(account)
-            if (result.isSuccess) {
-                val (session, syncedState) = result.getOrThrow()
-                val secs = syncedState.settings.pomodoroMinutes * 60
-                val restoredTimer = restorePersistedTimer(syncedState.persistedTimer, secs)
-                _uiState.update {
-                    it.copy(
-                        isAuthLoading = false,
-                        showAuthScreen = false,
-                        currentUserEmail = session.email,
-                        currentUserId = session.userId,
-                        cloudSyncStatus = CloudSyncStatus.SYNCED,
-                        cloudSyncErrorMessage = null,
-                        data = syncedState,
-                        timer = restoredTimer
-                    )
-                }
-                FocusNotificationManager.syncAllTaskReminders(appContext, syncedState.tasks, syncedState.settings)
-            } else {
-                val ex = result.exceptionOrNull()
-                val exactError = ex?.localizedMessage ?: ex?.message ?: "Google Drive sync failed after sign-in"
-                _uiState.update {
-                    it.copy(
-                        isAuthLoading = false,
-                        currentUserEmail = account.email,
-                        currentUserId = account.id ?: account.email,
-                        authErrorMessage = exactError,
-                        cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
-                        cloudSyncErrorMessage = exactError
-                    )
-                }
-            }
-        }
-    }
-
-    fun onGoogleSignInFailed(errorMessage: String) {
-        _uiState.update {
-            it.copy(
-                isAuthLoading = false,
-                authErrorMessage = errorMessage,
-                cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
-                cloudSyncErrorMessage = errorMessage
-            )
-        }
-    }
-
-    fun signOut() {
-        timerJob?.cancel()
-        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
-        FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
-        viewModelScope.launch {
-            repository.signOut()
-            val anonymousState = repository.loadState()
-            val secs = anonymousState.settings.pomodoroMinutes * 60
-            _uiState.update {
-                it.copy(
-                    currentUserEmail = null,
-                    currentUserId = null,
-                    cloudSyncStatus = CloudSyncStatus.UNAUTHENTICATED,
-                    cloudSyncErrorMessage = null,
-                    showAuthScreen = false,
-                    selectedTaskId = null,
-                    data = anonymousState,
-                    timer = TimerUiState(
-                        totalPhaseSeconds = secs,
-                        remainingSeconds = secs
-                    )
-                )
-            }
-            FocusNotificationManager.syncAllTaskReminders(appContext, anonymousState.tasks, anonymousState.settings)
-            syncWhiteNoise()
-        }
-    }
-
-    fun manualCloudSync() {
-        if (_uiState.value.currentUserEmail == null) {
-            setShowAuthScreen(true)
-            return
-        }
-        viewModelScope.launch {
-            _uiState.update {
-                it.copy(
-                    cloudSyncStatus = CloudSyncStatus.SYNCING,
-                    cloudSyncErrorMessage = null
-                )
-            }
-            val result = repository.forceCloudSyncNow(_uiState.value.data)
-            if (result.isSuccess) {
-                val syncedState = result.getOrThrow()
-                FocusNotificationManager.syncAllTaskReminders(
-                    appContext,
-                    syncedState.tasks,
-                    syncedState.settings
-                )
-                _uiState.update {
-                    it.copy(
-                        data = syncedState,
-                        cloudSyncStatus = CloudSyncStatus.SYNCED,
-                        cloudSyncErrorMessage = null
-                    )
-                }
-            } else {
-                val ex = result.exceptionOrNull()
-                val exactErr = ex?.localizedMessage ?: ex?.message ?: "Google Drive sync failed"
-                _uiState.update {
-                    it.copy(
-                        cloudSyncStatus = CloudSyncStatus.SYNC_FAILED,
-                        cloudSyncErrorMessage = exactErr
-                    )
-                }
-            }
-        }
-    }
-
-    fun clearCloudSyncError() {
-        _uiState.update { it.copy(cloudSyncErrorMessage = null) }
     }
 
     fun clearStatusBanner() {
@@ -1390,16 +1186,34 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         return repository.exportJson(_uiState.value.data)
     }
 
-    fun importBackupJson(json: String): Boolean {
+    fun createShareableBackupFile(): java.io.File {
+        return repository.createShareableBackupFile(_uiState.value.data)
+    }
+
+    fun parseBackupPreview(json: String): AppBackupState? {
+        return repository.parseBackupJson(json)
+    }
+
+    fun importBackupJson(json: String, mode: BackupImportMode = BackupImportMode.REPLACE): Boolean {
         val parsed = repository.parseBackupJson(json) ?: return false
+        importBackupState(parsed, mode)
+        return true
+    }
+
+    fun importBackupState(parsed: AppBackupState, mode: BackupImportMode) {
         timerJob?.cancel()
         FocusNotificationManager.cancelOngoingTimerNotification(appContext)
         FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
 
-        val secs = parsed.settings.pomodoroMinutes * 60
+        val targetState = when (mode) {
+            BackupImportMode.MERGE -> repository.mergeBackupStates(_uiState.value.data, parsed)
+            BackupImportMode.REPLACE -> parsed
+        }
+
+        val secs = targetState.settings.pomodoroMinutes * 60
         _uiState.update {
             it.copy(
-                data = parsed,
+                data = targetState,
                 selectedTaskId = null,
                 timer = TimerUiState(
                     totalPhaseSeconds = secs,
@@ -1407,10 +1221,9 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             )
         }
-        viewModelScope.launch { repository.saveState(parsed) }
-        FocusNotificationManager.syncAllTaskReminders(appContext, parsed.tasks, parsed.settings)
+        viewModelScope.launch { repository.saveState(targetState) }
+        FocusNotificationManager.syncAllTaskReminders(appContext, targetState.tasks, targetState.settings)
         syncWhiteNoise()
-        return true
     }
 
     fun resetDemoData() {

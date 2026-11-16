@@ -13,8 +13,8 @@ android {
     applicationId = "com.aistudio.focustodo.arpmzq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 6
-    versionName = "6.0"
+    versionCode = 18
+    versionName = "18.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -103,7 +103,6 @@ dependencies {
   // implementation(libs.androidx.credentials)
   // implementation(libs.androidx.credentials.play.services)
   // implementation(libs.googleid)
-  implementation(libs.play.services.auth)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)
