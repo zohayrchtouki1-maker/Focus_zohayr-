@@ -12,10 +12,9 @@ jobs:
           distribution: 'temurin'
       - name: Generate fixed debug keystore and print SHA-1
         run: |
-          mkdir -p ~/.android
-          keytool -genkeypair -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -startdate "2026/01/01 00:00:00" -dname "CN=Android Debug,O=Android,C=US"
+          keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -startdate "2026/01/01 00:00:00" -dname "CN=Android Debug,O=Android,C=US"
           echo "==================== COPY THIS SHA-1 ===================="
-          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android | grep "SHA1:"
+          keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android | grep "SHA1:"
           echo "==========================================================="
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
