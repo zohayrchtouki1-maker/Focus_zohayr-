@@ -132,6 +132,10 @@ class ExampleRobolectricTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repo = FocusRepository(context)
         val gso = repo.getGoogleSignInOptions()
+        assertEquals(
+            "452070073350-53h2d4c9tq23gfr3pmjpr11chbgccm8i.apps.googleusercontent.com",
+            gso.serverClientId
+        )
         assertTrue(
             gso.scopeArray.any { it.scopeUri == com.example.data.DriveScopes.DRIVE_APPDATA }
         )

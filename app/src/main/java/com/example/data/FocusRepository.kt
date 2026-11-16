@@ -42,6 +42,7 @@ data class ActiveUserSession(
 class FocusRepository(private val context: Context) {
     companion object {
         const val DRIVE_BACKUP_FILE_NAME = "focus_todo_backup.json"
+        const val WEB_CLIENT_ID = "452070073350-53h2d4c9tq23gfr3pmjpr11chbgccm8i.apps.googleusercontent.com"
     }
 
     private val moshi: Moshi = Moshi.Builder()
@@ -61,6 +62,7 @@ class FocusRepository(private val context: Context) {
 
     fun getGoogleSignInOptions(): GoogleSignInOptions {
         return GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(WEB_CLIENT_ID)
             .requestEmail()
             .requestScopes(Scope(DriveScopes.DRIVE_APPDATA))
             .build()
