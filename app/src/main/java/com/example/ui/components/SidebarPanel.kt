@@ -182,7 +182,7 @@ fun SidebarPanel(
                             CloudSyncStatus.SYNCED -> Triple(
                                 Icons.Default.CloudDone,
                                 ForestEmerald,
-                                "Synced (${uiState.firebaseProjectId})"
+                                "Synced (Google Drive)"
                             )
                             CloudSyncStatus.SYNCING -> Triple(
                                 Icons.Default.CloudSync,
@@ -197,7 +197,7 @@ fun SidebarPanel(
                             CloudSyncStatus.UNAUTHENTICATED -> Triple(
                                 Icons.Default.CloudQueue,
                                 MaterialTheme.colorScheme.onSurfaceVariant,
-                                if (isArabic) "سجل الدخول للمزامنة السحابية" else "Sign in for Cloud Sync"
+                                if (isArabic) "سجل الدخول بحساب Google للمزامنة" else "Sign in with Google to Sync"
                             )
                         }
                         Row(

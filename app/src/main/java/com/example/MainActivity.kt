@@ -9,6 +9,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -67,7 +70,6 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        ensureFirebaseInitialized(this)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
@@ -109,6 +111,30 @@ fun FocusTodoAppRoot(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ ->
         viewModel.refreshSystemPermissions()
+    }
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(ApiException::class.java)
+            if (account != null) {
+                viewModel.onGoogleSignInResult(account)
+            } else {
+                viewModel.onGoogleSignInFailed("Google Sign-In returned empty account.")
+            }
+        } catch (e: ApiException) {
+            val statusName = CommonStatusCodes.getStatusCodeString(e.statusCode)
+            val detail = if (e.statusCode == 10) {
+                "DEVELOPER_ERROR (code 10): Register your app's SHA-1 fingerprint & package name (com.aistudio.focustodo.arpmzq) in Google Cloud Console OAuth 2.0 Android Client."
+            } else {
+                "$statusName (code ${e.statusCode}): ${e.localizedMessage ?: e.message ?: "Sign-in failed"}"
+            }
+            viewModel.onGoogleSignInFailed(detail)
+        } catch (e: Exception) {
+            viewModel.onGoogleSignInFailed(e.localizedMessage ?: e.message ?: "Google Sign-In failed")
+        }
     }
 
     LaunchedEffect(uiState.permissionRequestTrigger) {
@@ -427,7 +453,7 @@ fun FocusTodoAppRoot(
                     )
                 }
 
-                // Account Sign In / Create Account / Cloud Sync Screen
+                // Account Sign In with Google / Google Drive AppData Sync Screen
                 AnimatedVisibility(
                     visible = uiState.showAuthScreen,
                     enter = fadeIn() + slideInVertically(initialOffsetY = { it / 6 }),
@@ -440,14 +466,14 @@ fun FocusTodoAppRoot(
                         cloudSyncErrorMessage = uiState.cloudSyncErrorMessage,
                         isAuthLoading = uiState.isAuthLoading,
                         authErrorMessage = uiState.authErrorMessage,
-                        firebaseProjectId = uiState.firebaseProjectId,
                         language = settings.language,
                         onDismiss = { viewModel.setShowAuthScreen(false) },
-                        onSignIn = { email, password -> viewModel.signIn(email, password) },
-                        onSignUp = { email, password -> viewModel.signUp(email, password) },
+                        onSignInWithGoogle = {
+                            viewModel.onGoogleSignInStarted()
+                            googleSignInLauncher.launch(viewModel.getGoogleSignInIntent())
+                        },
                         onSignOut = { viewModel.signOut() },
-                        onManualSync = { viewModel.manualCloudSync() },
-                        onClearError = { viewModel.clearAuthError() }
+                        onManualSync = { viewModel.manualCloudSync() }
                     )
                 }
             }

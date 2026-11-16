@@ -1,26 +1,30 @@
 package com.example.data
 
+import android.accounts.Account
 import android.content.Context
-import com.example.ensureFirebaseInitialized
+import android.content.Intent
 import com.example.model.AppBackupState
-import com.google.android.gms.tasks.Task
-import com.google.firebase.auth.EmailAuthProvider
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FirebaseFirestoreSettings
-import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.PersistentCacheSettings
-import com.google.firebase.firestore.Source
+import com.google.android.gms.auth.GoogleAuthUtil
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.Scope
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
+
+object DriveScopes {
+    const val DRIVE_APPDATA = "https://www.googleapis.com/auth/drive.appdata"
+}
 
 enum class CloudSyncStatus {
     UNAUTHENTICATED,
@@ -31,22 +35,15 @@ enum class CloudSyncStatus {
 
 data class ActiveUserSession(
     val userId: String,
-    val email: String
+    val email: String,
+    val displayName: String? = null
 )
 
-private suspend fun <T> Task<T>.awaitTask(): T = suspendCancellableCoroutine { cont ->
-    addOnCompleteListener { task ->
-        if (task.isSuccessful) {
-            cont.resume(task.result)
-        } else {
-            cont.resumeWithException(
-                task.exception ?: IllegalStateException("Firebase task failed without exception")
-            )
-        }
-    }
-}
-
 class FocusRepository(private val context: Context) {
+    companion object {
+        const val DRIVE_BACKUP_FILE_NAME = "focus_todo_backup.json"
+    }
+
     private val moshi: Moshi = Moshi.Builder()
         .addLast(KotlinJsonAdapterFactory())
         .build()
@@ -55,55 +52,37 @@ class FocusRepository(private val context: Context) {
 
     private val rootStateFile: File get() = File(context.filesDir, "focus_todo_state.json")
 
-    @Volatile
-    private var firestoreCacheConfigured = false
-
     private fun userStateFile(userId: String): File {
-        val dir = File(context.filesDir, "users/$userId")
+        val safeId = userId.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val dir = File(context.filesDir, "users/$safeId")
         if (!dir.exists()) dir.mkdirs()
-        return File(dir, "focus_todo_state.json")
+        return File(dir, DRIVE_BACKUP_FILE_NAME)
     }
 
-    private fun getFirebaseAuth(): FirebaseAuth {
-        val app = ensureFirebaseInitialized(context)
-        return FirebaseAuth.getInstance(app)
+    fun getGoogleSignInOptions(): GoogleSignInOptions {
+        return GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestScopes(Scope(DriveScopes.DRIVE_APPDATA))
+            .build()
     }
 
-    private fun getFirestore(): FirebaseFirestore {
-        val app = ensureFirebaseInitialized(context)
-        val db = FirebaseFirestore.getInstance(app)
-        if (!firestoreCacheConfigured) {
-            synchronized(this) {
-                if (!firestoreCacheConfigured) {
-                    try {
-                        val settings = FirebaseFirestoreSettings.Builder()
-                            .setLocalCacheSettings(PersistentCacheSettings.newBuilder().build())
-                            .build()
-                        db.firestoreSettings = settings
-                    } catch (_: Exception) {
-                        // Settings already locked/applied on this instance
-                    }
-                    firestoreCacheConfigured = true
-                }
-            }
-        }
-        return db
+    fun getGoogleSignInClient(): GoogleSignInClient {
+        return GoogleSignIn.getClient(context, getGoogleSignInOptions())
     }
 
-    val firebaseProjectId: String
-        get() = try {
-            val app = ensureFirebaseInitialized(context)
-            app.options.projectId ?: "focus-zohayr"
-        } catch (_: Exception) {
-            "focus-zohayr"
-        }
+    fun getGoogleSignInIntent(): Intent {
+        return getGoogleSignInClient().signInIntent
+    }
 
     fun getActiveSessionSync(): ActiveUserSession? {
         return try {
-            val user: FirebaseUser = getFirebaseAuth().currentUser ?: return null
+            val account = GoogleSignIn.getLastSignedInAccount(context) ?: return null
+            val email = account.email ?: return null
+            val id = account.id ?: email
             ActiveUserSession(
-                userId = user.uid,
-                email = user.email ?: ""
+                userId = id,
+                email = email,
+                displayName = account.displayName
             )
         } catch (_: Exception) {
             null
@@ -116,134 +95,106 @@ class FocusRepository(private val context: Context) {
     }
 
     /**
-     * Real Firebase Authentication Sign Up (`createUserWithEmailAndPassword`) +
-     * automatic migration of any existing local data into `users/{userId}` in Cloud Firestore.
+     * Completes Google Sign-In using the returned [GoogleSignInAccount], downloads/restores
+     * `focus_todo_backup.json` from the user's Google Drive `appDataFolder`, merges any pre-login
+     * local tasks so nothing is lost, and uploads the unified `focus_todo_backup.json` to `appDataFolder`.
      */
-    suspend fun signUp(email: String, password: String): Result< Pair<ActiveUserSession, AppBackupState> > =
-        withContext(Dispatchers.IO) {
-            val cleanEmail = email.trim()
-            if (cleanEmail.isBlank() || !cleanEmail.contains("@")) {
-                return@withContext Result.failure(IllegalArgumentException("Please enter a valid email address."))
-            }
-            if (password.length < 6) {
-                return@withContext Result.failure(IllegalArgumentException("Password must be at least 6 characters."))
-            }
+    suspend fun handleGoogleSignInSuccess(
+        account: GoogleSignInAccount
+    ): Result<Pair<ActiveUserSession, AppBackupState>> = withContext(Dispatchers.IO) {
+        val email = account.email
+            ?: return@withContext Result.failure(
+                IllegalStateException("Google account did not provide an email address.")
+            )
+        val androidAccount = account.account
+            ?: Account(email, "com.google")
+        val userId = account.id ?: email
+        val session = ActiveUserSession(
+            userId = userId,
+            email = email,
+            displayName = account.displayName
+        )
 
-            try {
-                val auth = getFirebaseAuth()
-                val authResult = auth.createUserWithEmailAndPassword(cleanEmail, password).awaitTask()
-                val user = authResult.user
-                    ?: return@withContext Result.failure(IllegalStateException("User creation returned null user."))
-                val session = ActiveUserSession(userId = user.uid, email = user.email ?: cleanEmail)
-                val migratedState = migrateAndSyncOnLogin(session)
-                Result.success(session to migratedState)
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
+        try {
+            val syncedState = syncAndRestoreWithDriveAppData(androidAccount, session)
+            Result.success(session to syncedState)
+        } catch (e: Exception) {
+            Result.failure(e)
         }
-
-    /**
-     * Real Firebase Authentication Sign In (`EmailAuthProvider.getCredential` + `signInWithCredential`) +
-     * automatic migration/merge with `users/{userId}` in Cloud Firestore.
-     */
-    suspend fun signIn(email: String, password: String): Result< Pair<ActiveUserSession, AppBackupState> > =
-        withContext(Dispatchers.IO) {
-            val cleanEmail = email.trim()
-            if (cleanEmail.isBlank() || !cleanEmail.contains("@")) {
-                return@withContext Result.failure(IllegalArgumentException("Please enter a valid email address."))
-            }
-            if (password.isEmpty()) {
-                return@withContext Result.failure(IllegalArgumentException("Please enter your password."))
-            }
-
-            try {
-                val auth = getFirebaseAuth()
-                val credential = EmailAuthProvider.getCredential(cleanEmail, password)
-                val authResult = auth.signInWithCredential(credential).awaitTask()
-                val user = authResult.user
-                    ?: return@withContext Result.failure(IllegalStateException("Sign-in returned null user."))
-                val session = ActiveUserSession(userId = user.uid, email = user.email ?: cleanEmail)
-                val syncedState = migrateAndSyncOnLogin(session)
-                Result.success(session to syncedState)
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
+    }
 
     suspend fun signOut() = withContext(Dispatchers.IO) {
         try {
-            getFirebaseAuth().signOut()
+            val client = getGoogleSignInClient()
+            suspendCancellableCoroutine<Unit> { cont ->
+                client.signOut().addOnCompleteListener {
+                    if (cont.isActive) cont.resume(Unit)
+                }
+            }
         } catch (_: Exception) {
         }
     }
 
     /**
-     * Attaches a real-time Firestore snapshot listener on `users/{userId}` so changes made on
-     * any other phone or device sync automatically in real time.
+     * Downloads `focus_todo_backup.json` from Google Drive `appDataFolder` (if it exists),
+     * merges with any local state, caches locally, and uploads the updated `focus_todo_backup.json`
+     * to `appDataFolder`.
      */
-    fun listenToUserCloudState(
-        userId: String,
-        onRemoteStateChanged: (AppBackupState) -> Unit,
-        onError: (String) -> Unit
-    ): ListenerRegistration? {
-        return try {
-            val db = getFirestore()
-            db.collection("users").document(userId)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        onError(error.localizedMessage ?: error.message ?: "Firestore listener error")
-                        return@addSnapshotListener
-                    }
-                    if (snapshot != null && snapshot.exists()) {
-                        val stateJson = snapshot.getString("stateJson")
-                        if (!stateJson.isNullOrBlank()) {
-                            val parsed = parseBackupJson(stateJson)?.let { cleanLegacySamples(it) }
-                            if (parsed != null) {
-                                saveStateInternal(parsed, userStateFile(userId))
-                                onRemoteStateChanged(parsed)
-                            }
-                        }
-                    }
-                }
-        } catch (e: Exception) {
-            onError(e.localizedMessage ?: e.message ?: "Firestore listener setup failed")
-            null
-        }
-    }
-
-    /**
-     * On first login or sign-in, fetches `users/{userId}` from Cloud Firestore, merges any
-     * pre-login local data from `focus_todo_state.json` so nothing is lost, caches locally,
-     * and writes the merged state to `users/{userId}` in Cloud Firestore.
-     */
-    private suspend fun migrateAndSyncOnLogin(session: ActiveUserSession): AppBackupState {
-        val db = getFirestore()
-        val docRef = db.collection("users").document(session.userId)
-
-        val localAnonymousState = readStateFromFile(rootStateFile)
-        val localUserState = readStateFromFile(userStateFile(session.userId))
-
-        // Fetch from server first (falling back to Firestore offline cache only if device is offline)
-        val remoteSnapshot = try {
-            withTimeout(12_000L) {
-                docRef.get(Source.SERVER).awaitTask()
-            }
-        } catch (serverEx: Exception) {
-            try {
-                docRef.get(Source.CACHE).awaitTask()
+    suspend fun forceCloudSyncNow(currentLocalState: AppBackupState): Result<AppBackupState> =
+        withContext(Dispatchers.IO) {
+            val account = try {
+                GoogleSignIn.getLastSignedInAccount(context)
             } catch (_: Exception) {
-                throw serverEx
+                null
+            } ?: return@withContext Result.failure(
+                IllegalStateException("Not signed in with Google. Please sign in first.")
+            )
+
+            val email = account.email
+                ?: return@withContext Result.failure(
+                    IllegalStateException("Signed-in Google account has no email.")
+                )
+            val androidAccount = account.account ?: Account(email, "com.google")
+            val session = ActiveUserSession(
+                userId = account.id ?: email,
+                email = email,
+                displayName = account.displayName
+            )
+
+            try {
+                // Save current in-memory state to local user file first so syncAndRestore merges it
+                saveStateInternal(cleanLegacySamples(currentLocalState), userStateFile(session.userId))
+                val synced = syncAndRestoreWithDriveAppData(androidAccount, session)
+                Result.success(synced)
+            } catch (e: Exception) {
+                Result.failure(e)
             }
         }
 
-        val remoteState: AppBackupState? = if (remoteSnapshot.exists()) {
-            remoteSnapshot.getString("stateJson")?.let { parseBackupJson(it) }
+    private fun syncAndRestoreWithDriveAppData(
+        androidAccount: Account,
+        session: ActiveUserSession
+    ): AppBackupState {
+        var accessToken = fetchDriveAccessToken(androidAccount)
+        val existingFileId = try {
+            findBackupFileIdInAppData(accessToken)
+        } catch (e: DriveUnauthorizedException) {
+            GoogleAuthUtil.clearToken(context, accessToken)
+            accessToken = fetchDriveAccessToken(androidAccount)
+            findBackupFileIdInAppData(accessToken)
+        }
+
+        val remoteState: AppBackupState? = if (existingFileId != null) {
+            downloadBackupFileFromAppData(accessToken, existingFileId)
         } else {
             null
         }
 
+        val localAnonymousState = readStateFromFile(rootStateFile)
+        val localUserState = readStateFromFile(userStateFile(session.userId))
+
         val merged = when {
-            remoteState != null && localUserState != null -> mergeStates(remoteState, localUserState)
+            remoteState != null && localUserState != null -> mergeStates(localUserState, remoteState)
             remoteState != null && localAnonymousState != null && localAnonymousState.tasks.isNotEmpty() ->
                 mergeStates(remoteState, localAnonymousState)
             remoteState != null -> remoteState
@@ -256,97 +207,180 @@ class FocusRepository(private val context: Context) {
         val cleaned = cleanLegacySamples(merged)
         saveStateInternal(cleaned, userStateFile(session.userId))
 
-        // Clear migrated anonymous tasks from root file so they don't re-merge into another account
+        // Clear migrated anonymous tasks from root file so they don't re-merge later
         if (localAnonymousState != null && localAnonymousState.tasks.isNotEmpty()) {
             saveStateInternal(SeedData.createInitialState(), rootStateFile)
         }
 
-        // Write to Cloud Firestore users/{userId} and await completion
-        pushToFirestoreOrThrow(session, cleaned)
+        uploadBackupFileToAppData(accessToken, existingFileId, cleaned)
         return cleaned
     }
 
-    /**
-     * Pushes `state` to `users/{userId}` in Cloud Firestore and waits for server acknowledgment.
-     */
-    suspend fun pushStateToCloud(state: AppBackupState): Result<Unit> = withContext(Dispatchers.IO) {
-        val session = getActiveSessionSync()
-            ?: return@withContext Result.failure(IllegalStateException("Not signed in."))
-        try {
-            pushToFirestoreOrThrow(session, state)
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
+    private fun pushStateToDriveAppDataOrThrow(state: AppBackupState) {
+        val account = GoogleSignIn.getLastSignedInAccount(context)
+            ?: throw IllegalStateException("Not signed in with Google.")
+        val email = account.email ?: throw IllegalStateException("Google account email is missing.")
+        val androidAccount = account.account ?: Account(email, "com.google")
+
+        var accessToken = fetchDriveAccessToken(androidAccount)
+        val existingFileId = try {
+            findBackupFileIdInAppData(accessToken)
+        } catch (_: DriveUnauthorizedException) {
+            GoogleAuthUtil.clearToken(context, accessToken)
+            accessToken = fetchDriveAccessToken(androidAccount)
+            findBackupFileIdInAppData(accessToken)
         }
+
+        uploadBackupFileToAppData(accessToken, existingFileId, cleanLegacySamples(state))
     }
 
-    /**
-     * Manual "Sync Now": Pulls latest `users/{userId}` from Cloud Firestore server, merges any
-     * local state, and writes back to Cloud Firestore `users/{userId}`, returning the synced state
-     * or throwing the exact Firebase error if sync fails.
-     */
-    suspend fun forceCloudSyncNow(currentLocalState: AppBackupState): Result<AppBackupState> =
-        withContext(Dispatchers.IO) {
-            val session = getActiveSessionSync()
-                ?: return@withContext Result.failure(IllegalStateException("Not signed in. Please sign in first."))
+    private fun fetchDriveAccessToken(account: Account): String {
+        val scopeStr = "oauth2:${DriveScopes.DRIVE_APPDATA}"
+        return GoogleAuthUtil.getToken(context, account, scopeStr)
+    }
 
-            try {
-                val db = getFirestore()
-                val docRef = db.collection("users").document(session.userId)
-                val serverSnap = withTimeout(12_000L) {
-                    docRef.get(Source.SERVER).awaitTask()
-                }
-
-                val remoteState = if (serverSnap.exists()) {
-                    serverSnap.getString("stateJson")?.let { parseBackupJson(it) }
-                } else {
-                    null
-                }
-
-                val remoteUpdatedAt = if (serverSnap.exists()) {
-                    serverSnap.getLong("updatedAtEpochMillis") ?: 0L
-                } else {
-                    0L
-                }
-
-                val finalState = if (remoteState != null && remoteUpdatedAt > 0L) {
-                    // Use currentLocalState as primary so local edits aren't lost, while pulling any new remote items
-                    cleanLegacySamples(mergeStates(currentLocalState, remoteState))
-                } else {
-                    cleanLegacySamples(currentLocalState)
-                }
-
-                saveStateInternal(finalState, userStateFile(session.userId))
-                pushToFirestoreOrThrow(session, finalState)
-                Result.success(finalState)
-            } catch (e: Exception) {
-                Result.failure(e)
+    private fun findBackupFileIdInAppData(accessToken: String): String? {
+        var conn: HttpURLConnection? = null
+        return try {
+            val query = URLEncoder.encode("name = '$DRIVE_BACKUP_FILE_NAME' and trashed = false", "UTF-8")
+            val url = URL(
+                "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=$query&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&pageSize=1"
+            )
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 12_000
+                readTimeout = 12_000
+                setRequestProperty("Authorization", "Bearer $accessToken")
+                setRequestProperty("Accept", "application/json")
             }
-        }
 
-    private suspend fun pushToFirestoreOrThrow(session: ActiveUserSession, state: AppBackupState) {
-        val db = getFirestore()
-        val now = System.currentTimeMillis()
-        val stateJsonString = adapter.toJson(state)
+            val code = conn.responseCode
+            if (code == 401) {
+                throw DriveUnauthorizedException()
+            }
+            val body = if (code in 200..299) {
+                conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } else {
+                val errBody = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                throw IllegalStateException("Google Drive list failed (HTTP $code): ${extractDriveError(errBody)}")
+            }
 
-        val dataMap = mapOf(
-            "userId" to session.userId,
-            "email" to session.email,
-            "updatedAtEpochMillis" to now,
-            "taskCount" to state.tasks.size,
-            "projectCount" to state.projects.size,
-            "completedTaskCount" to state.tasks.count { it.isCompleted },
-            "focusRecordCount" to state.focusRecords.size,
-            "stateJson" to stateJsonString
-        )
-
-        withTimeout(12_000L) {
-            db.collection("users")
-                .document(session.userId)
-                .set(dataMap)
-                .awaitTask()
+            val json = JSONObject(body)
+            val files = json.optJSONArray("files")
+            if (files != null && files.length() > 0) {
+                files.getJSONObject(0).optString("id").takeIf { it.isNotBlank() }
+            } else {
+                null
+            }
+        } finally {
+            conn?.disconnect()
         }
     }
+
+    private fun downloadBackupFileFromAppData(accessToken: String, fileId: String): AppBackupState? {
+        var conn: HttpURLConnection? = null
+        return try {
+            val url = URL("https://www.googleapis.com/drive/v3/files/$fileId?alt=media")
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 12_000
+                readTimeout = 12_000
+                setRequestProperty("Authorization", "Bearer $accessToken")
+            }
+
+            val code = conn.responseCode
+            if (code == 404) return null
+            if (code !in 200..299) {
+                val errBody = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                throw IllegalStateException("Google Drive download failed (HTTP $code): ${extractDriveError(errBody)}")
+            }
+
+            val rawJson = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            parseBackupJson(rawJson)?.let { cleanLegacySamples(it) }
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun uploadBackupFileToAppData(
+        accessToken: String,
+        existingFileId: String?,
+        state: AppBackupState
+    ) {
+        val jsonContent = adapter.toJson(state)
+        var conn: HttpURLConnection? = null
+        try {
+            if (existingFileId != null) {
+                // Update existing focus_todo_backup.json in appDataFolder
+                val url = URL("https://www.googleapis.com/upload/drive/v3/files/$existingFileId?uploadType=media&fields=id,modifiedTime")
+                conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "PATCH"
+                    connectTimeout = 15_000
+                    readTimeout = 15_000
+                    doOutput = true
+                    setRequestProperty("Authorization", "Bearer $accessToken")
+                    setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                }
+                conn.outputStream.use { os ->
+                    os.write(jsonContent.toByteArray(Charsets.UTF_8))
+                }
+            } else {
+                // Create new focus_todo_backup.json inside appDataFolder via multipart upload
+                val boundary = "FocusTodoDriveBoundary_${System.currentTimeMillis()}"
+                val url = URL("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,modifiedTime")
+                conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 15_000
+                    readTimeout = 15_000
+                    doOutput = true
+                    setRequestProperty("Authorization", "Bearer $accessToken")
+                    setRequestProperty("Content-Type", "multipart/related; boundary=$boundary")
+                }
+
+                val metadataJson = JSONObject().apply {
+                    put("name", DRIVE_BACKUP_FILE_NAME)
+                    put("parents", org.json.JSONArray().put("appDataFolder"))
+                    put("mimeType", "application/json")
+                }.toString()
+
+                val multipartBody = buildString {
+                    append("--$boundary\r\n")
+                    append("Content-Type: application/json; charset=UTF-8\r\n\r\n")
+                    append(metadataJson)
+                    append("\r\n--$boundary\r\n")
+                    append("Content-Type: application/json; charset=UTF-8\r\n\r\n")
+                    append(jsonContent)
+                    append("\r\n--$boundary--\r\n")
+                }
+
+                conn.outputStream.use { os ->
+                    os.write(multipartBody.toByteArray(Charsets.UTF_8))
+                }
+            }
+
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val errBody = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                throw IllegalStateException("Google Drive upload failed (HTTP $code): ${extractDriveError(errBody)}")
+            }
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun extractDriveError(errBody: String): String {
+        if (errBody.isBlank()) return "Unknown Drive error"
+        return try {
+            val json = JSONObject(errBody)
+            json.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
+                ?: json.optString("error_description").takeIf { it.isNotBlank() }
+                ?: errBody.take(160)
+        } catch (_: Exception) {
+            errBody.take(160)
+        }
+    }
+
+    private class DriveUnauthorizedException : Exception("Google Drive token expired")
 
     private fun mergeStates(primary: AppBackupState, secondary: AppBackupState): AppBackupState {
         val mergedTasks = (primary.tasks + secondary.tasks)
@@ -414,9 +448,9 @@ class FocusRepository(private val context: Context) {
     suspend fun saveState(state: AppBackupState): Result<Unit> = withContext(Dispatchers.IO) {
         val targetFile = activeStateFile()
         saveStateInternal(state, targetFile)
-        val session = getActiveSessionSync() ?: return@withContext Result.success(Unit)
+        getActiveSessionSync() ?: return@withContext Result.success(Unit)
         try {
-            pushToFirestoreOrThrow(session, state)
+            pushStateToDriveAppDataOrThrow(state)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)

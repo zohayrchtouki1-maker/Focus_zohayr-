@@ -128,23 +128,20 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `firebase repository configures focus-zohayr project and persists state`() {
+    fun `google drive repository configures drive appdata scope and persists backup state`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val firebaseApp = FirebaseInitializer.ensureInitialized(context)
-        assertNotNull(firebaseApp)
-        assertEquals("focus-zohayr", firebaseApp.options.projectId)
-        assertEquals("1:452070073350:android:1d7162188b590aa5664f87", firebaseApp.options.applicationId)
-        assertNotNull(com.google.firebase.auth.FirebaseAuth.getInstance(firebaseApp))
-        assertNotNull(com.google.firebase.firestore.FirebaseFirestore.getInstance(firebaseApp))
-
         val repo = FocusRepository(context)
+        val gso = repo.getGoogleSignInOptions()
+        assertTrue(
+            gso.scopeArray.any { it.scopeUri == com.example.data.DriveScopes.DRIVE_APPDATA }
+        )
+
         kotlinx.coroutines.runBlocking {
-            assertEquals("focus-zohayr", repo.firebaseProjectId)
             val stateWithTask = SeedData.createInitialState().copy(
                 tasks = listOf(
                     TaskItem(
-                        id = "cloud_ready_task_1",
-                        title = "مهمة جاهزة للمزامنة السحابية",
+                        id = "drive_ready_task_1",
+                        title = "مهمة جاهزة للمزامنة مع Google Drive",
                         dueDateEpochDay = DateUtils.todayEpochDay()
                     )
                 )
@@ -154,7 +151,7 @@ class ExampleRobolectricTest {
 
             val loadedState = repo.loadState()
             assertEquals(1, loadedState.tasks.size)
-            assertEquals("cloud_ready_task_1", loadedState.tasks.first().id)
+            assertEquals("drive_ready_task_1", loadedState.tasks.first().id)
         }
     }
 }

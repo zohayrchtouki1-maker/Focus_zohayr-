@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="firebase_client_app_id" translatable="false">1:452070073350:android:1d7162188b590aa5664f87</string>
-    <string name="firebase_client_api_key_p1" translatable="false">AIzaSyCrSm9HQBIByaLR</string>
-    <string name="firebase_client_api_key_p2" translatable="false">LPJTDPypDn_90xUG-r0</string>
-    <string name="firebase_client_project_id" translatable="false">focus-zohayr</string>
-    <string name="firebase_client_storage_bucket" translatable="false">focus-zohayr.firebasestorage.app</string>
-    <string name="firebase_client_gcm_sender_id" translatable="false">452070073350</string>
-</resources>
