@@ -130,6 +130,13 @@ class ExampleRobolectricTest {
     @Test
     fun `firebase repository configures focus-zohayr project and persists state`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        val firebaseApp = FirebaseInitializer.ensureInitialized(context)
+        assertNotNull(firebaseApp)
+        assertEquals("focus-zohayr", firebaseApp.options.projectId)
+        assertEquals("1:452070073350:android:1d7162188b590aa5664f87", firebaseApp.options.applicationId)
+        assertNotNull(com.google.firebase.auth.FirebaseAuth.getInstance(firebaseApp))
+        assertNotNull(com.google.firebase.firestore.FirebaseFirestore.getInstance(firebaseApp))
+
         val repo = FocusRepository(context)
         kotlinx.coroutines.runBlocking {
             assertEquals("focus-zohayr", repo.firebaseProjectId)

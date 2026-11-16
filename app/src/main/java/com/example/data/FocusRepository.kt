@@ -1,9 +1,9 @@
 package com.example.data
 
 import android.content.Context
+import com.example.FirebaseInitializer
 import com.example.model.AppBackupState
 import com.google.android.gms.tasks.Task
-import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -55,59 +55,59 @@ class FocusRepository(private val context: Context) {
 
     private val rootStateFile: File get() = File(context.filesDir, "focus_todo_state.json")
 
+    @Volatile
+    private var firestoreCacheConfigured = false
+
     private fun userStateFile(userId: String): File {
         val dir = File(context.filesDir, "users/$userId")
         if (!dir.exists()) dir.mkdirs()
         return File(dir, "focus_todo_state.json")
     }
 
-    private val firebaseAuth: FirebaseAuth? by lazy {
-        try {
-            if (FirebaseApp.getApps(context).isEmpty()) {
-                FirebaseApp.initializeApp(context)
-            }
-            FirebaseAuth.getInstance()
-        } catch (_: Exception) {
-            null
-        }
+    private fun getFirebaseAuth(): FirebaseAuth {
+        val app = FirebaseInitializer.ensureInitialized(context)
+        return FirebaseAuth.getInstance(app)
     }
 
-    private val firestore: FirebaseFirestore? by lazy {
-        try {
-            if (FirebaseApp.getApps(context).isEmpty()) {
-                FirebaseApp.initializeApp(context)
-            }
-            FirebaseFirestore.getInstance().apply {
-                try {
-                    val settings = FirebaseFirestoreSettings.Builder()
-                        .setLocalCacheSettings(PersistentCacheSettings.newBuilder().build())
-                        .build()
-                    firestoreSettings = settings
-                } catch (_: Exception) {
-                    // Settings already locked/configured on this instance
+    private fun getFirestore(): FirebaseFirestore {
+        val app = FirebaseInitializer.ensureInitialized(context)
+        val db = FirebaseFirestore.getInstance(app)
+        if (!firestoreCacheConfigured) {
+            synchronized(this) {
+                if (!firestoreCacheConfigured) {
+                    try {
+                        val settings = FirebaseFirestoreSettings.Builder()
+                            .setLocalCacheSettings(PersistentCacheSettings.newBuilder().build())
+                            .build()
+                        db.firestoreSettings = settings
+                    } catch (_: Exception) {
+                        // Settings already locked/applied on this instance
+                    }
+                    firestoreCacheConfigured = true
                 }
             }
-        } catch (_: Exception) {
-            null
         }
+        return db
     }
 
     val firebaseProjectId: String
         get() = try {
-            if (FirebaseApp.getApps(context).isEmpty()) {
-                FirebaseApp.initializeApp(context)
-            }
-            FirebaseApp.getInstance().options.projectId ?: "focus-zohayr"
+            val app = FirebaseInitializer.ensureInitialized(context)
+            app.options.projectId ?: "focus-zohayr"
         } catch (_: Exception) {
             "focus-zohayr"
         }
 
     fun getActiveSessionSync(): ActiveUserSession? {
-        val user: FirebaseUser = firebaseAuth?.currentUser ?: return null
-        return ActiveUserSession(
-            userId = user.uid,
-            email = user.email ?: ""
-        )
+        return try {
+            val user: FirebaseUser = getFirebaseAuth().currentUser ?: return null
+            ActiveUserSession(
+                userId = user.uid,
+                email = user.email ?: ""
+            )
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun activeStateFile(): File {
@@ -129,10 +129,8 @@ class FocusRepository(private val context: Context) {
                 return@withContext Result.failure(IllegalArgumentException("Password must be at least 6 characters."))
             }
 
-            val auth = firebaseAuth
-                ?: return@withContext Result.failure(IllegalStateException("FirebaseAuth is not initialized."))
-
             try {
+                val auth = getFirebaseAuth()
                 val authResult = auth.createUserWithEmailAndPassword(cleanEmail, password).awaitTask()
                 val user = authResult.user
                     ?: return@withContext Result.failure(IllegalStateException("User creation returned null user."))
@@ -158,10 +156,8 @@ class FocusRepository(private val context: Context) {
                 return@withContext Result.failure(IllegalArgumentException("Please enter your password."))
             }
 
-            val auth = firebaseAuth
-                ?: return@withContext Result.failure(IllegalStateException("FirebaseAuth is not initialized."))
-
             try {
+                val auth = getFirebaseAuth()
                 val credential = EmailAuthProvider.getCredential(cleanEmail, password)
                 val authResult = auth.signInWithCredential(credential).awaitTask()
                 val user = authResult.user
@@ -176,7 +172,7 @@ class FocusRepository(private val context: Context) {
 
     suspend fun signOut() = withContext(Dispatchers.IO) {
         try {
-            firebaseAuth?.signOut()
+            getFirebaseAuth().signOut()
         } catch (_: Exception) {
         }
     }
@@ -190,24 +186,29 @@ class FocusRepository(private val context: Context) {
         onRemoteStateChanged: (AppBackupState) -> Unit,
         onError: (String) -> Unit
     ): ListenerRegistration? {
-        val db = firestore ?: return null
-        return db.collection("users").document(userId)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    onError(error.localizedMessage ?: error.message ?: "Firestore listener error")
-                    return@addSnapshotListener
-                }
-                if (snapshot != null && snapshot.exists()) {
-                    val stateJson = snapshot.getString("stateJson")
-                    if (!stateJson.isNullOrBlank()) {
-                        val parsed = parseBackupJson(stateJson)?.let { cleanLegacySamples(it) }
-                        if (parsed != null) {
-                            saveStateInternal(parsed, userStateFile(userId))
-                            onRemoteStateChanged(parsed)
+        return try {
+            val db = getFirestore()
+            db.collection("users").document(userId)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        onError(error.localizedMessage ?: error.message ?: "Firestore listener error")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null && snapshot.exists()) {
+                        val stateJson = snapshot.getString("stateJson")
+                        if (!stateJson.isNullOrBlank()) {
+                            val parsed = parseBackupJson(stateJson)?.let { cleanLegacySamples(it) }
+                            if (parsed != null) {
+                                saveStateInternal(parsed, userStateFile(userId))
+                                onRemoteStateChanged(parsed)
+                            }
                         }
                     }
                 }
-            }
+        } catch (e: Exception) {
+            onError(e.localizedMessage ?: e.message ?: "Firestore listener setup failed")
+            null
+        }
     }
 
     /**
@@ -216,7 +217,7 @@ class FocusRepository(private val context: Context) {
      * and writes the merged state to `users/{userId}` in Cloud Firestore.
      */
     private suspend fun migrateAndSyncOnLogin(session: ActiveUserSession): AppBackupState {
-        val db = firestore ?: throw IllegalStateException("FirebaseFirestore is not initialized.")
+        val db = getFirestore()
         val docRef = db.collection("users").document(session.userId)
 
         val localAnonymousState = readStateFromFile(rootStateFile)
@@ -288,10 +289,9 @@ class FocusRepository(private val context: Context) {
         withContext(Dispatchers.IO) {
             val session = getActiveSessionSync()
                 ?: return@withContext Result.failure(IllegalStateException("Not signed in. Please sign in first."))
-            val db = firestore
-                ?: return@withContext Result.failure(IllegalStateException("FirebaseFirestore is not initialized."))
 
             try {
+                val db = getFirestore()
                 val docRef = db.collection("users").document(session.userId)
                 val serverSnap = withTimeout(12_000L) {
                     docRef.get(Source.SERVER).awaitTask()
@@ -325,7 +325,7 @@ class FocusRepository(private val context: Context) {
         }
 
     private suspend fun pushToFirestoreOrThrow(session: ActiveUserSession, state: AppBackupState) {
-        val db = firestore ?: throw IllegalStateException("FirebaseFirestore is not initialized.")
+        val db = getFirestore()
         val now = System.currentTimeMillis()
         val stateJsonString = adapter.toJson(state)
 

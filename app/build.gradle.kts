@@ -16,10 +16,28 @@ android {
     applicationId = "com.aistudio.focustodo.arpmzq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "2.0"
+    versionCode = 3
+    versionName = "3.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    val gsFile = file("google-services.json")
+    val gsJson = if (gsFile.exists()) gsFile.readText() else ""
+    fun extractJsonValue(key: String, fallback: String): String {
+      val regex = Regex("\"$key\"\\s*:\\s*\"([^\"]+)\"")
+      return regex.find(gsJson)?.groupValues?.getOrNull(1) ?: fallback
+    }
+    val googleAppId = extractJsonValue("mobilesdk_app_id", "1:452070073350:android:1d7162188b590aa5664f87")
+    val googleApiKey = extractJsonValue("current_key", "")
+    val googleProjectId = extractJsonValue("project_id", "focus-zohayr")
+    val googleStorageBucket = extractJsonValue("storage_bucket", "focus-zohayr.firebasestorage.app")
+    val googleGcmSenderId = extractJsonValue("project_number", "452070073350")
+
+    buildConfigField("String", "FIREBASE_GOOGLE_APP_ID", "\"$googleAppId\"")
+    buildConfigField("String", "FIREBASE_GOOGLE_API_KEY", "\"$googleApiKey\"")
+    buildConfigField("String", "FIREBASE_GOOGLE_PROJECT_ID", "\"$googleProjectId\"")
+    buildConfigField("String", "FIREBASE_GOOGLE_STORAGE_BUCKET", "\"$googleStorageBucket\"")
+    buildConfigField("String", "FIREBASE_GOOGLE_GCM_SENDER_ID", "\"$googleGcmSenderId\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
