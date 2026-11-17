@@ -412,13 +412,14 @@ class ExampleRobolectricTest {
         // Default model is gemini-2.5-flash
         assertEquals(com.example.ai.TomatoGeminiModel.FLASH_2_5, vm.uiState.value.tomatoAiSelectedModel)
         assertEquals("2.5 Flash — متوازن وذكي", com.example.ai.TomatoGeminiModel.FLASH_2_5.displayLabel)
-        assertEquals("2.5 Flash-Lite — سريع وخفيف", com.example.ai.TomatoGeminiModel.FLASH_LITE_2_5.displayLabel)
+        assertEquals("Flash-Lite 3.5 — سريع وخفيف", com.example.ai.TomatoGeminiModel.FLASH_LITE_3_5.displayLabel)
+        assertEquals("Flash-Lite 3.5", com.example.ai.TomatoGeminiModel.FLASH_LITE_3_5.shortBadge)
         assertEquals("2.5 Pro — تخطيط عميق", com.example.ai.TomatoGeminiModel.PRO_2_5.displayLabel)
 
-        vm.selectTomatoAiModel(com.example.ai.TomatoGeminiModel.FLASH_LITE_2_5)
-        assertEquals(com.example.ai.TomatoGeminiModel.FLASH_LITE_2_5, com.example.ai.TomatoAiService.getSavedModel(app))
+        vm.selectTomatoAiModel(com.example.ai.TomatoGeminiModel.FLASH_LITE_3_5)
+        assertEquals(com.example.ai.TomatoGeminiModel.FLASH_LITE_3_5, com.example.ai.TomatoAiService.getSavedModel(app))
         assertEquals(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=AIzaSyTestKey12345",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=AIzaSyTestKey12345",
             com.example.ai.TomatoAiService.buildEndpointUrl(vm.uiState.value.tomatoAiSelectedModel.modelId, "AIzaSyTestKey12345")
         )
 

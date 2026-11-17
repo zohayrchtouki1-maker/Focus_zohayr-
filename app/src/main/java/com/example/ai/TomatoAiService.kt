@@ -97,10 +97,10 @@ enum class TomatoGeminiModel(
         shortBadge = "2.5 Flash",
         displayLabel = "2.5 Flash — متوازن وذكي"
     ),
-    FLASH_LITE_2_5(
-        modelId = "gemini-2.5-flash-lite",
-        shortBadge = "2.5 Flash-Lite",
-        displayLabel = "2.5 Flash-Lite — سريع وخفيف"
+    FLASH_LITE_3_5(
+        modelId = "gemini-3.5-flash-lite",
+        shortBadge = "Flash-Lite 3.5",
+        displayLabel = "Flash-Lite 3.5 — سريع وخفيف"
     ),
     PRO_2_5(
         modelId = "gemini-2.5-pro",
@@ -110,7 +110,11 @@ enum class TomatoGeminiModel(
 
     companion object {
         fun fromModelId(id: String?): TomatoGeminiModel {
-            return entries.find { it.modelId.equals(id?.trim(), ignoreCase = true) } ?: FLASH_2_5
+            val clean = id?.trim()?.removePrefix("models/") ?: return FLASH_2_5
+            if (clean.endsWith("flash-lite", ignoreCase = true)) {
+                return FLASH_LITE_3_5
+            }
+            return entries.find { it.modelId.equals(clean, ignoreCase = true) } ?: FLASH_2_5
         }
     }
 }
@@ -133,7 +137,11 @@ object TomatoAiService {
     fun getSavedModel(context: Context): TomatoGeminiModel {
         val prefs = context.getSharedPreferences(FocusRepository.PREFS_NAME, Context.MODE_PRIVATE)
         val raw = prefs.getString(PREF_GEMINI_MODEL, TomatoGeminiModel.FLASH_2_5.modelId)
-        return TomatoGeminiModel.fromModelId(raw)
+        val resolved = TomatoGeminiModel.fromModelId(raw)
+        if (raw != resolved.modelId) {
+            prefs.edit().putString(PREF_GEMINI_MODEL, resolved.modelId).commit()
+        }
+        return resolved
     }
 
     fun saveSelectedModel(context: Context, model: TomatoGeminiModel) {
@@ -142,7 +150,7 @@ object TomatoAiService {
     }
 
     fun buildEndpointUrl(modelId: String, apiKey: String): String {
-        val resolvedModel = TomatoGeminiModel.fromModelId(modelId).modelId
+        val resolvedModel = TomatoGeminiModel.fromModelId(modelId).modelId.removePrefix("models/")
         return "https://generativelanguage.googleapis.com/v1beta/models/$resolvedModel:generateContent?key=${apiKey.trim()}"
     }
 
