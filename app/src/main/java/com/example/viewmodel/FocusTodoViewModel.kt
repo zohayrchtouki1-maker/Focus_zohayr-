@@ -3,6 +3,10 @@ package com.example.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai.TomatoAiService
+import com.example.ai.TomatoChatMessage
+import com.example.ai.TomatoToolExecutionResult
+import com.example.ai.TomatoToolExecutor
 import com.example.audio.SoundSynthesizer
 import com.example.blocker.StrictAppBlockerManager
 import com.example.blocker.StrictBlockerPermissionStatus
@@ -36,6 +40,7 @@ import com.example.notifications.FocusNotificationManager
 import com.example.notifications.SystemPermissionSnapshot
 import com.example.notifications.SystemPermissionsHelper
 import com.example.ui.components.formatSecondsMmSs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +49,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.util.UUID
 import kotlin.math.ceil
 import kotlin.math.max
@@ -71,7 +77,7 @@ data class TimerUiState(
 
 data class MainUiState(
     val isLoaded: Boolean = false,
-    val data: AppBackupState = AppBackupState(),
+    val data: AppBackupState = SeedData.createInitialState(),
     val destination: NavDestination = NavDestination.SmartList(SmartListType.INBOX),
     val sortOption: TaskSortOption = TaskSortOption.PRIORITY,
     val showCompletedAccordion: Boolean = false,
@@ -84,6 +90,10 @@ data class MainUiState(
     val showSettings: Boolean = false,
     val showBackgroundPermissionsModal: Boolean = false,
     val showStrictBlockerSetup: Boolean = false,
+    val showTomatoAi: Boolean = false,
+    val tomatoAiApiKey: String = "",
+    val tomatoAiMessages: List<TomatoChatMessage> = emptyList(),
+    val tomatoAiIsLoading: Boolean = false,
     val timer: TimerUiState = TimerUiState(),
     val systemPermissions: SystemPermissionSnapshot = SystemPermissionSnapshot(),
     val strictBlockerPermissions: StrictBlockerPermissionStatus = StrictBlockerPermissionStatus(),
@@ -92,7 +102,7 @@ data class MainUiState(
     val lastAutoBackupTimeMillis: Long = 0L
 )
 
-class FocusTodoViewModel(application: Application) : AndroidViewModel(application) {
+class FocusTodoViewModel(application: Application) : AndroidViewModel(application), TomatoToolExecutor {
     private val appContext = application.applicationContext
     private val repository = FocusRepository(appContext)
     private val soundSynthesizer = SoundSynthesizer()
@@ -119,6 +129,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             val shouldPromptOnLaunch = !permSnapshot.notificationsGranted
 
             val lastAutoBackup = repository.getLastAutoBackupTimeMillis()
+            val savedGeminiKey = TomatoAiService.getSavedApiKey(appContext)
 
             _uiState.update {
                 it.copy(
@@ -128,7 +139,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     systemPermissions = permSnapshot,
                     strictBlockerPermissions = blockerPerms,
                     permissionRequestTrigger = if (shouldPromptOnLaunch) it.permissionRequestTrigger + 1 else it.permissionRequestTrigger,
-                    lastAutoBackupTimeMillis = lastAutoBackup
+                    lastAutoBackupTimeMillis = lastAutoBackup,
+                    tomatoAiApiKey = savedGeminiKey
                 )
             }
             syncStrictBlockerTimerState()
@@ -1422,6 +1434,426 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         }
         FocusNotificationManager.syncAllTaskReminders(appContext, demo.tasks, demo.settings)
         syncWhiteNoise()
+    }
+
+    // --- Tomato AI Autonomous Chat & Tool Execution ---
+
+    fun setShowTomatoAi(show: Boolean) {
+        if (show) {
+            val currentKey = TomatoAiService.getSavedApiKey(appContext)
+            _uiState.update { it.copy(showTomatoAi = true, tomatoAiApiKey = currentKey) }
+        } else {
+            _uiState.update { it.copy(showTomatoAi = false) }
+        }
+    }
+
+    fun saveTomatoAiApiKey(apiKey: String) {
+        val clean = apiKey.trim()
+        TomatoAiService.saveApiKey(appContext, clean)
+        _uiState.update { it.copy(tomatoAiApiKey = clean) }
+        // Trigger a state save so the API key in SharedPreferences is also included in local backup
+        commitData { it }
+    }
+
+    fun clearTomatoAiChat() {
+        _uiState.update { it.copy(tomatoAiMessages = emptyList()) }
+    }
+
+    fun sendTomatoAiMessage(userText: String) {
+        val cleanText = userText.trim()
+        if (cleanText.isEmpty() || _uiState.value.tomatoAiIsLoading) return
+
+        val apiKey = _uiState.value.tomatoAiApiKey.ifBlank {
+            TomatoAiService.getSavedApiKey(appContext)
+        }
+        val historyBefore = _uiState.value.tomatoAiMessages
+        val userMsg = TomatoChatMessage(
+            isUser = true,
+            text = cleanText
+        )
+
+        _uiState.update {
+            it.copy(
+                tomatoAiMessages = it.tomatoAiMessages + userMsg,
+                tomatoAiIsLoading = true
+            )
+        }
+
+        viewModelScope.launch {
+            try {
+                val result = TomatoAiService.sendMessageWithAutonomousTools(
+                    apiKey = apiKey,
+                    conversationHistory = historyBefore,
+                    userMessage = cleanText,
+                    executor = this@FocusTodoViewModel
+                )
+                result.fold(
+                    onSuccess = { replyMsg ->
+                        _uiState.update {
+                            it.copy(
+                                tomatoAiMessages = it.tomatoAiMessages + replyMsg,
+                                tomatoAiIsLoading = false
+                            )
+                        }
+                    },
+                    onFailure = { err ->
+                        val errMsg = TomatoChatMessage(
+                            isUser = false,
+                            text = err.message ?: "حدث خطأ أثناء الاتصال بـ Gemini.",
+                            isError = true
+                        )
+                        _uiState.update {
+                            it.copy(
+                                tomatoAiMessages = it.tomatoAiMessages + errMsg,
+                                tomatoAiIsLoading = false
+                            )
+                        }
+                    }
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val errMsg = TomatoChatMessage(
+                    isUser = false,
+                    text = e.message ?: "حدث خطأ غير متوقع.",
+                    isError = true
+                )
+                _uiState.update {
+                    it.copy(
+                        tomatoAiMessages = it.tomatoAiMessages + errMsg,
+                        tomatoAiIsLoading = false
+                    )
+                }
+            }
+        }
+    }
+
+    override fun getCurrentStateSnapshot(): Pair<AppBackupState, TimerUiState> {
+        val s = _uiState.value
+        return s.data to s.timer
+    }
+
+    private fun resolveOrCreateProjectId(projectQuery: String?): Pair<String?, String?> {
+        val q = projectQuery?.trim().orEmpty()
+        if (q.isEmpty() || q.equals("null", ignoreCase = true) || q.equals("inbox", ignoreCase = true)) {
+            return null to null
+        }
+
+        val currentData = _uiState.value.data
+        // 1. Exact ID or Name match
+        currentData.projects.find {
+            it.id.equals(q, ignoreCase = true) || it.name.equals(q, ignoreCase = true)
+        }?.let { return it.id to it.name }
+
+        // 2. Substring / stripped-emoji match on Project Name
+        val strippedQ = q.replace(Regex("[^\\p{L}\\p{N}\\s]"), "").trim()
+        if (strippedQ.isNotEmpty()) {
+            currentData.projects.find { proj ->
+                val strippedProj = proj.name.replace(Regex("[^\\p{L}\\p{N}\\s]"), "").trim()
+                strippedProj.equals(strippedQ, ignoreCase = true) ||
+                    strippedProj.contains(strippedQ, ignoreCase = true) ||
+                    strippedQ.contains(strippedProj, ignoreCase = true)
+            }?.let { return it.id to it.name }
+        }
+
+        // 3. Match on Folder Name or Folder ID -> pick first project in that folder
+        val matchedFolder = currentData.folders.find { folder ->
+            val strippedFolder = folder.name.replace(Regex("[^\\p{L}\\p{N}\\s]"), "").trim()
+            folder.id.equals(q, ignoreCase = true) ||
+                folder.name.equals(q, ignoreCase = true) ||
+                (strippedQ.isNotEmpty() && (
+                    strippedFolder.contains(strippedQ, ignoreCase = true) ||
+                        strippedQ.contains(strippedFolder, ignoreCase = true)
+                    ))
+        }
+        if (matchedFolder != null) {
+            val childProj = currentData.projects.firstOrNull { it.folderId == matchedFolder.id }
+            if (childProj != null) {
+                return childProj.id to childProj.name
+            }
+        }
+
+        // 4. Create new project if not found
+        val now = System.currentTimeMillis()
+        val newProj = ProjectItem(
+            name = q,
+            colorHex = "#E05246",
+            folderId = matchedFolder?.id,
+            sortOrder = currentData.projects.size,
+            createdAt = now,
+            updatedAt = now
+        )
+        commitData { data ->
+            data.copy(projects = data.projects + newProj)
+        }
+        return newProj.id to newProj.name
+    }
+
+    private fun resolveOrCreateTagIds(tagQuery: String?): List<String> {
+        val q = tagQuery?.trim()?.removePrefix("#").orEmpty()
+        if (q.isEmpty() || q.equals("null", ignoreCase = true) || q.equals("none", ignoreCase = true)) {
+            return emptyList()
+        }
+        val currentData = _uiState.value.data
+        val existing = currentData.tags.find {
+            it.id.equals(q, ignoreCase = true) ||
+                it.name.equals(q, ignoreCase = true) ||
+                it.name.contains(q, ignoreCase = true)
+        }
+        if (existing != null) {
+            return listOf(existing.id)
+        }
+        val newTag = TagItem(name = q, colorHex = "#3B7BF6")
+        commitData { data ->
+            data.copy(tags = data.tags + newTag)
+        }
+        return listOf(newTag.id)
+    }
+
+    private fun findTaskByIdOrTitle(taskId: String?, targetTitle: String?): TaskItem? {
+        val tasks = _uiState.value.data.tasks
+        if (!taskId.isNullOrBlank()) {
+            tasks.find { it.id == taskId }?.let { return it }
+        }
+        if (!targetTitle.isNullOrBlank()) {
+            val clean = targetTitle.trim()
+            tasks.find { it.title.equals(clean, ignoreCase = true) }?.let { return it }
+            tasks.find {
+                it.title.contains(clean, ignoreCase = true) ||
+                    clean.contains(it.title, ignoreCase = true)
+            }?.let { return it }
+        }
+        return null
+    }
+
+    override fun executeAddTask(
+        title: String,
+        estimatedPomodoros: Int,
+        reminderTime: String?,
+        projectQuery: String?,
+        tagQuery: String?,
+        dueDateEpochDay: Long?,
+        priority: TaskPriority,
+        notes: String
+    ): TomatoToolExecutionResult {
+        val cleanTitle = title.trim()
+        if (cleanTitle.isEmpty()) {
+            return TomatoToolExecutionResult(
+                functionName = "addTask",
+                resultJson = JSONObject().put("status", "error").put("message", "Task title is empty"),
+                humanSummary = "⚠️ لم يتم تحديد عنوان المهمة"
+            )
+        }
+
+        if (reminderTime != null) {
+            requestNativePermissionsIfMissing()
+        }
+
+        val (resolvedProjId, resolvedProjName) = resolveOrCreateProjectId(projectQuery)
+        val resolvedTagIds = resolveOrCreateTagIds(tagQuery)
+        val safePoms = estimatedPomodoros.coerceIn(1, 20)
+
+        val task = TaskItem(
+            title = cleanTitle,
+            projectId = resolvedProjId,
+            tagIds = resolvedTagIds,
+            priority = priority,
+            estimatedPomodoros = safePoms,
+            dueDateEpochDay = dueDateEpochDay ?: DateUtils.todayEpochDay(),
+            isSomeday = false,
+            isEvent = false,
+            reminderTime = reminderTime,
+            notes = notes
+        )
+
+        commitData { data ->
+            data.copy(tasks = listOf(task) + data.tasks)
+        }
+        FocusNotificationManager.scheduleTaskReminder(appContext, task, _uiState.value.data.settings)
+
+        val alarmPart = if (reminderTime != null) " • ⏰ $reminderTime" else ""
+        val projPart = if (resolvedProjName != null) " • 📁 $resolvedProjName" else ""
+        val summary = "✅ تمت إضافة مهمة: \"$cleanTitle\" (🍅 $safePoms$alarmPart$projPart)"
+
+        return TomatoToolExecutionResult(
+            functionName = "addTask",
+            resultJson = JSONObject().apply {
+                put("status", "success")
+                put("taskId", task.id)
+                put("title", task.title)
+                put("estimatedPomodoros", safePoms)
+                put("reminderTime", reminderTime ?: "NONE")
+                put("project", resolvedProjName ?: "Inbox")
+            },
+            humanSummary = summary
+        )
+    }
+
+    override fun executeUpdateTask(
+        taskId: String?,
+        targetTitle: String?,
+        newTitle: String?,
+        estimatedPomodoros: Int?,
+        reminderTime: String?,
+        projectQuery: String?,
+        tagQuery: String?,
+        dueDateEpochDay: Long?,
+        priority: TaskPriority?,
+        notes: String?
+    ): TomatoToolExecutionResult {
+        val target = findTaskByIdOrTitle(taskId, targetTitle)
+            ?: return TomatoToolExecutionResult(
+                functionName = "updateTask",
+                resultJson = JSONObject().put("status", "error").put("message", "Task not found"),
+                humanSummary = "⚠️ لم يتم العثور على المهمة المطلوبة للتعديل"
+            )
+
+        val (resolvedProjId, resolvedProjName) = if (projectQuery != null) {
+            resolveOrCreateProjectId(projectQuery)
+        } else {
+            target.projectId to null
+        }
+        val resolvedTags = if (tagQuery != null) {
+            resolveOrCreateTagIds(tagQuery)
+        } else {
+            target.tagIds
+        }
+
+        val updatedReminder = when (reminderTime) {
+            null -> target.reminderTime
+            "NONE" -> null
+            else -> reminderTime
+        }
+
+        updateTask(target.id) { existing ->
+            existing.copy(
+                title = newTitle?.takeIf { it.isNotBlank() } ?: existing.title,
+                estimatedPomodoros = estimatedPomodoros?.coerceIn(1, 20) ?: existing.estimatedPomodoros,
+                reminderTime = updatedReminder,
+                projectId = resolvedProjId,
+                tagIds = resolvedTags,
+                dueDateEpochDay = dueDateEpochDay ?: existing.dueDateEpochDay,
+                priority = priority ?: existing.priority,
+                notes = notes ?: existing.notes
+            )
+        }
+
+        val finalTitle = newTitle?.takeIf { it.isNotBlank() } ?: target.title
+        val alarmNote = if (updatedReminder != null) " • ⏰ $updatedReminder" else ""
+        val projNote = if (resolvedProjName != null) " • 📁 $resolvedProjName" else ""
+
+        return TomatoToolExecutionResult(
+            functionName = "updateTask",
+            resultJson = JSONObject().apply {
+                put("status", "success")
+                put("taskId", target.id)
+                put("title", finalTitle)
+                put("reminderTime", updatedReminder ?: "NONE")
+            },
+            humanSummary = "✏️ تم تحديث المهمة: \"$finalTitle\"$alarmNote$projNote"
+        )
+    }
+
+    override fun executeCompleteTask(
+        taskId: String?,
+        targetTitle: String?,
+        completed: Boolean
+    ): TomatoToolExecutionResult {
+        val target = findTaskByIdOrTitle(taskId, targetTitle)
+            ?: return TomatoToolExecutionResult(
+                functionName = "completeTask",
+                resultJson = JSONObject().put("status", "error").put("message", "Task not found"),
+                humanSummary = "⚠️ لم يتم العثور على المهمة"
+            )
+
+        if (target.isCompleted != completed) {
+            toggleTaskCompleted(target.id)
+        }
+
+        return TomatoToolExecutionResult(
+            functionName = "completeTask",
+            resultJson = JSONObject().apply {
+                put("status", "success")
+                put("taskId", target.id)
+                put("title", target.title)
+                put("completed", completed)
+            },
+            humanSummary = if (completed) {
+                "☑️ تم إنجاز المهمة: \"${target.title}\""
+            } else {
+                "🔄 تمت إعادة فتح المهمة: \"${target.title}\""
+            }
+        )
+    }
+
+    override fun executeDeleteTask(
+        taskId: String?,
+        targetTitle: String?
+    ): TomatoToolExecutionResult {
+        val target = findTaskByIdOrTitle(taskId, targetTitle)
+            ?: return TomatoToolExecutionResult(
+                functionName = "deleteTask",
+                resultJson = JSONObject().put("status", "error").put("message", "Task not found"),
+                humanSummary = "⚠️ لم يتم العثور على المهمة لحذفها"
+            )
+
+        deleteTask(target.id)
+
+        return TomatoToolExecutionResult(
+            functionName = "deleteTask",
+            resultJson = JSONObject().apply {
+                put("status", "success")
+                put("deletedTaskId", target.id)
+                put("deletedTitle", target.title)
+            },
+            humanSummary = "🗑️ تم حذف المهمة: \"${target.title}\""
+        )
+    }
+
+    override fun executeCreateProject(
+        name: String,
+        colorHex: String?,
+        folderName: String?
+    ): TomatoToolExecutionResult {
+        val cleanName = name.trim()
+        if (cleanName.isEmpty()) {
+            return TomatoToolExecutionResult(
+                functionName = "createProject",
+                resultJson = JSONObject().put("status", "error").put("message", "Project name is empty"),
+                humanSummary = "⚠️ اسم المشروع فارغ"
+            )
+        }
+
+        val currentData = _uiState.value.data
+        var targetFolderId: String? = null
+        if (!folderName.isNullOrBlank()) {
+            val existingFolder = currentData.folders.find {
+                it.name.equals(folderName.trim(), ignoreCase = true) ||
+                    it.name.contains(folderName.trim(), ignoreCase = true)
+            }
+            if (existingFolder != null) {
+                targetFolderId = existingFolder.id
+            } else {
+                val newFolder = FolderItem(name = folderName.trim())
+                targetFolderId = newFolder.id
+                commitData { data ->
+                    data.copy(folders = data.folders + newFolder)
+                }
+            }
+        }
+
+        val safeColor = if (!colorHex.isNullOrBlank() && colorHex.startsWith("#")) colorHex else "#E05246"
+        saveProject(null, cleanName, safeColor, targetFolderId)
+
+        return TomatoToolExecutionResult(
+            functionName = "createProject",
+            resultJson = JSONObject().apply {
+                put("status", "success")
+                put("projectName", cleanName)
+                put("folderName", folderName ?: "Root")
+            },
+            humanSummary = "📁 تم إنشاء المشروع: \"$cleanName\""
+        )
     }
 
     override fun onCleared() {

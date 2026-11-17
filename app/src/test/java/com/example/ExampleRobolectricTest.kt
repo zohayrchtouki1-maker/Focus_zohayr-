@@ -165,6 +165,10 @@ class ExampleRobolectricTest {
         assertEquals("focus_zohayr_backup.json", FocusRepository.MASTER_BACKUP_FILE_NAME)
         assertEquals("focus_zohayr_backup.json", FocusRepository.AUTO_BACKUP_FILE_NAME)
 
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        org.robolectric.Shadows.shadowOf(context as android.app.Application)
+            .grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+
         kotlinx.coroutines.runBlocking {
             val initialSeed = SeedData.createInitialState()
             val customProject = com.example.model.ProjectItem(
@@ -222,6 +226,11 @@ class ExampleRobolectricTest {
             val saveRes = repo.saveState(currentState)
             assertTrue(saveRes.isSuccess)
             assertTrue(repo.getLastAutoBackupTimeMillis() > 0L)
+            assertNotNull(nm.getNotificationChannel(FocusNotificationManager.CHANNEL_AUTO_BACKUP))
+            val autoBackupNotif = org.robolectric.Shadows.shadowOf(nm)
+                .getNotification(FocusNotificationManager.NOTIFICATION_ID_AUTO_BACKUP)
+            assertNotNull(autoBackupNotif)
+            assertEquals(FocusNotificationManager.CHANNEL_AUTO_BACKUP, autoBackupNotif.channelId)
 
             val loadedState = repo.loadState()
             assertEquals(1, loadedState.tasks.size)
@@ -371,5 +380,109 @@ class ExampleRobolectricTest {
             false,
             com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.zhiliaoapp.musically")
         )
+    }
+
+    @Test
+    fun `tomato ai live context snapshot and autonomous function calling tools execute on database`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        val vm = com.example.viewmodel.FocusTodoViewModel(app)
+        vm.resetDemoData()
+
+        // 1. Test API Key saving
+        vm.saveTomatoAiApiKey("AIzaSyTestKey12345")
+        assertEquals("AIzaSyTestKey12345", com.example.ai.TomatoAiService.getSavedApiKey(app))
+        assertEquals("AIzaSyTestKey12345", vm.uiState.value.tomatoAiApiKey)
+
+        // 2. Test Live Context Prompt contains folders, projects, tags, and timer settings
+        val (snapshotData, snapshotTimer) = vm.getCurrentStateSnapshot()
+        val liveContext = com.example.ai.TomatoAiService.buildLiveAppContextPrompt(snapshotData, snapshotTimer)
+        assertTrue(liveContext.contains("التعليم والتطوير"))
+        assertTrue(liveContext.contains("الحياة والروتين"))
+        assertTrue(liveContext.contains("الروتين اليومي"))
+        assertTrue(liveContext.contains("مشاريع جانبية"))
+
+        // 3. Test autonomous addTask tool call
+        val addRes = com.example.ai.TomatoAiService.dispatchToolCall(
+            com.example.ai.TomatoFunctionCall(
+                name = "addTask",
+                args = org.json.JSONObject().apply {
+                    put("title", "مراجعة الرياضيات - التفاضل")
+                    put("estimatedPomodoros", 4)
+                    put("reminderTime", "16:30")
+                    put("project", "التعليم والتطوير")
+                    put("tag", "مهم")
+                    put("priority", "HIGH")
+                }
+            ),
+            vm
+        )
+        assertEquals("success", addRes.resultJson.optString("status"))
+        val createdTask = vm.uiState.value.data.tasks.find { it.title == "مراجعة الرياضيات - التفاضل" }
+        assertNotNull(createdTask)
+        assertEquals(4, createdTask!!.estimatedPomodoros)
+        assertEquals("16:30", createdTask.reminderTime)
+        assertEquals("proj_study", createdTask.projectId)
+        assertTrue(createdTask.tagIds.contains("tag_imp"))
+
+        // 4. Test autonomous updateTask tool call
+        val updateRes = com.example.ai.TomatoAiService.dispatchToolCall(
+            com.example.ai.TomatoFunctionCall(
+                name = "updateTask",
+                args = org.json.JSONObject().apply {
+                    put("taskId", createdTask.id)
+                    put("estimatedPomodoros", 6)
+                    put("reminderTime", "18:00")
+                }
+            ),
+            vm
+        )
+        assertEquals("success", updateRes.resultJson.optString("status"))
+        val updatedTask = vm.uiState.value.data.tasks.find { it.id == createdTask.id }!!
+        assertEquals(6, updatedTask.estimatedPomodoros)
+        assertEquals("18:00", updatedTask.reminderTime)
+
+        // 5. Test autonomous completeTask tool call
+        val completeRes = com.example.ai.TomatoAiService.dispatchToolCall(
+            com.example.ai.TomatoFunctionCall(
+                name = "completeTask",
+                args = org.json.JSONObject().apply {
+                    put("taskId", createdTask.id)
+                    put("completed", true)
+                }
+            ),
+            vm
+        )
+        assertEquals("success", completeRes.resultJson.optString("status"))
+        assertTrue(vm.uiState.value.data.tasks.find { it.id == createdTask.id }!!.isCompleted)
+
+        // 6. Test autonomous createProject and deleteTask tool calls
+        val createProjRes = com.example.ai.TomatoAiService.dispatchToolCall(
+            com.example.ai.TomatoFunctionCall(
+                name = "createProject",
+                args = org.json.JSONObject().apply {
+                    put("name", "اللغة الإنجليزية")
+                    put("folderName", "التعليم والتطوير")
+                }
+            ),
+            vm
+        )
+        assertEquals("success", createProjRes.resultJson.optString("status"))
+        assertTrue(vm.uiState.value.data.projects.any { it.name == "اللغة الإنجليزية" })
+
+        val deleteRes = com.example.ai.TomatoAiService.dispatchToolCall(
+            com.example.ai.TomatoFunctionCall(
+                name = "deleteTask",
+                args = org.json.JSONObject().apply {
+                    put("taskId", createdTask.id)
+                }
+            ),
+            vm
+        )
+        assertEquals("success", deleteRes.resultJson.optString("status"))
+        assertEquals(null, vm.uiState.value.data.tasks.find { it.id == createdTask.id })
+
+        vm.uiState.value.data.projects.find { it.name == "اللغة الإنجليزية" }?.let {
+            vm.deleteProject(it.id)
+        }
     }
 }

@@ -58,6 +58,7 @@ import com.example.ui.components.SettingsDialog
 import com.example.ui.components.SidebarPanel
 import com.example.ui.components.StrictBlockerSetupDialog
 import com.example.ui.components.TaskInspectorPanel
+import com.example.ui.components.TomatoAiDialog
 import com.example.ui.theme.CoralPrimary
 import com.example.ui.theme.FocusTodoTheme
 import com.example.viewmodel.FocusTodoViewModel
@@ -186,6 +187,7 @@ fun FocusTodoAppRoot(
                                 onAddTag = { name, color -> viewModel.addTag(name, color) },
                                 onDeleteTag = { viewModel.deleteTag(it) },
                                 onOpenCalendar = { viewModel.setShowCalendar(true) },
+                                onOpenTomatoAi = { viewModel.setShowTomatoAi(true) },
                                 modifier = Modifier.width(290.dp)
                             )
 
@@ -274,6 +276,7 @@ fun FocusTodoAppRoot(
                                     onAddTag = { name, color -> viewModel.addTag(name, color) },
                                     onDeleteTag = { viewModel.deleteTag(it) },
                                     onOpenCalendar = { viewModel.setShowCalendar(true) },
+                                    onOpenTomatoAi = { viewModel.setShowTomatoAi(true) },
                                     modifier = Modifier.fillMaxSize()
                                 )
                             } else {
@@ -479,6 +482,24 @@ fun FocusTodoAppRoot(
                         onToggleLockedInRecents = { confirmed ->
                             viewModel.updateSettings { it.copy(lockedInRecentsConfirmed = confirmed) }
                         }
+                    )
+                }
+
+                // Tomato AI Chat Assistant Screen (Tomato AI 🍅)
+                AnimatedVisibility(
+                    visible = uiState.showTomatoAi,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it / 6 }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 6 })
+                ) {
+                    TomatoAiDialog(
+                        apiKey = uiState.tomatoAiApiKey,
+                        messages = uiState.tomatoAiMessages,
+                        isLoading = uiState.tomatoAiIsLoading,
+                        language = settings.language,
+                        onSaveApiKey = { viewModel.saveTomatoAiApiKey(it) },
+                        onSendMessage = { viewModel.sendTomatoAiMessage(it) },
+                        onClearChat = { viewModel.clearTomatoAiChat() },
+                        onDismiss = { viewModel.setShowTomatoAi(false) }
                     )
                 }
             }

@@ -10,7 +10,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
-import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.telecom.TelecomManager
@@ -26,9 +25,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
-import java.util.Locale
-import kotlin.math.ceil
-import kotlin.math.max
 
 data class InstalledAppInfo(
     val packageName: String,
@@ -38,11 +34,10 @@ data class InstalledAppInfo(
 
 data class StrictBlockerPermissionStatus(
     val isDeviceAdminGranted: Boolean = false,
-    val isOverlayPermissionGranted: Boolean = false,
     val isAccessibilityServiceGranted: Boolean = false
 ) {
     val isFullyReady: Boolean
-        get() = isDeviceAdminGranted && isOverlayPermissionGranted && isAccessibilityServiceGranted
+        get() = isDeviceAdminGranted && isAccessibilityServiceGranted
 }
 
 object StrictAppBlockerManager {
@@ -94,10 +89,6 @@ object StrictAppBlockerManager {
         "com.android.server.telecom",
         "com.sh.smart.caller"
     )
-
-    fun notifyBlockedAttempt(packageName: String) {
-        _blockedEvents.tryEmit(packageName)
-    }
 
     private fun getPrefs(context: Context) =
         context.applicationContext.getSharedPreferences(FocusRepository.PREFS_NAME, Context.MODE_PRIVATE)
@@ -162,31 +153,6 @@ object StrictAppBlockerManager {
             editor.putBoolean(KEY_STRICT_BLOCKER_ENABLED, true)
         }
         editor.commit()
-
-        if (!isFocusRunning) {
-            StrictBlockingOverlayController.dismissOverlay(context)
-        }
-    }
-
-    fun getActiveFocusTaskTitle(context: Context): String {
-        return getPrefs(context).getString(KEY_ACTIVE_FOCUS_TASK_TITLE, "جلسة تركيز")
-            ?.ifBlank { "جلسة تركيز" } ?: "جلسة تركيز"
-    }
-
-    fun getFormattedRemainingFocusTime(context: Context): String {
-        val sp = getPrefs(context)
-        val isStopwatch = sp.getBoolean(KEY_ACTIVE_FOCUS_IS_STOPWATCH, false)
-        val now = System.currentTimeMillis()
-        val totalSeconds = if (isStopwatch) {
-            val start = sp.getLong(KEY_ACTIVE_FOCUS_SESSION_START_MILLIS, now)
-            max(0, ((now - start) / 1000L).toInt())
-        } else {
-            val end = sp.getLong(KEY_ACTIVE_FOCUS_SESSION_END_MILLIS, 0L)
-            max(0, ceil((end - now) / 1000.0).toInt())
-        }
-        val mins = totalSeconds / 60
-        val secs = totalSeconds % 60
-        return String.format(Locale.ENGLISH, "%02d:%02d", mins, secs)
     }
 
     fun isStrictFocusSessionActivelyRunning(context: Context): Boolean {
@@ -214,10 +180,6 @@ object StrictAppBlockerManager {
         } catch (_: Exception) {
             false
         }
-    }
-
-    fun isOverlayPermissionGranted(context: Context): Boolean {
-        return StrictBlockingOverlayController.canDrawOverlays(context)
     }
 
     fun isAccessibilityServiceEnabled(context: Context): Boolean {
@@ -253,7 +215,6 @@ object StrictAppBlockerManager {
     fun getPermissionStatus(context: Context): StrictBlockerPermissionStatus {
         return StrictBlockerPermissionStatus(
             isDeviceAdminGranted = isDeviceAdminActive(context),
-            isOverlayPermissionGranted = isOverlayPermissionGranted(context),
             isAccessibilityServiceGranted = isAccessibilityServiceEnabled(context)
         )
     }
@@ -278,26 +239,6 @@ object StrictAppBlockerManager {
         } catch (_: Exception) {
             try {
                 val fallback = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(fallback)
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    fun openOverlayPermissionSettings(context: Context) {
-        try {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:${context.packageName}")
-            ).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-        } catch (_: Exception) {
-            try {
-                val fallback = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(fallback)

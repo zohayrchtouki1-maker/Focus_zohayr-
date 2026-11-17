@@ -36,7 +36,6 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -116,12 +115,6 @@ fun StrictBlockerSetupDialog(
     var lockWarningBanner by remember { mutableStateOf<String?>(null) }
 
     val deviceAdminLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) {
-        onRefreshBlockerPermissions()
-    }
-
-    val overlayPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
         onRefreshBlockerPermissions()
@@ -213,7 +206,7 @@ fun StrictBlockerSetupDialog(
                         color = DarkTextPrimary
                     )
                     Text(
-                        text = "حماية ثلاثية الطبقات: رصد فوري + درع تغطية كامل + منع حذف التطبيق",
+                        text = "منع فتح أي تطبيق خارج القائمة المسموحة أثناء جلسات التركيز",
                         fontSize = 11.sp,
                         color = DarkTextSecondary
                     )
@@ -328,7 +321,7 @@ fun StrictBlockerSetupDialog(
                                         text = if (isFocusSessionActivelyRunning && isStrictEnabled) {
                                             "🔒 جلسة التركيز جارية الآن — لا يمكن إيقاف الحظر حتى ينتهي المؤقت"
                                         } else {
-                                            "حظر فوري ودرع شاشة كاملة لأي تطبيق غير موجود في القائمة المسموحة (بما في ذلك الإعدادات)"
+                                            "إغلاق أي تطبيق غير موجود في القائمة المسموحة تلقائيًا والعودة للشاشة الرئيسية"
                                         },
                                         fontSize = 11.sp,
                                         color = if (isFocusSessionActivelyRunning && isStrictEnabled) {
@@ -427,35 +420,11 @@ fun StrictBlockerSetupDialog(
                     )
                 }
 
-                // Card 2: الصلاحية 2: الظهور فوق التطبيقات (Full-Screen Blocking Overlay Shield)
+                // Card 2: الصلاحية 2: خدمات الوصول (Accessibility Service)
                 item {
                     PermissionGateCard(
-                        stepTitle = "الصلاحية 2: الظهور فوق التطبيقات (Overlay Shield)",
-                        description = "تُظهر شاشة حظر كاملة غير قابلة للتجاوز مع العد التنازلي للمؤقت فور محاولة فتح أي تطبيق محظور.",
-                        instructions = null,
-                        isGranted = permStatus.isOverlayPermissionGranted,
-                        buttonText = "تفعيل الظهور فوق التطبيقات",
-                        icon = Icons.Default.Layers,
-                        buttonTestTag = "enable_overlay_permission_button",
-                        onActionClick = {
-                            try {
-                                val intent = Intent(
-                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    android.net.Uri.parse("package:${context.packageName}")
-                                )
-                                overlayPermissionLauncher.launch(intent)
-                            } catch (_: Exception) {
-                                StrictAppBlockerManager.openOverlayPermissionSettings(context)
-                            }
-                        }
-                    )
-                }
-
-                // Card 3: الصلاحية 3: خدمات الوصول (Accessibility Service)
-                item {
-                    PermissionGateCard(
-                        stepTitle = "الصلاحية 3: خدمات الوصول (Accessibility Service)",
-                        description = "ترصد فتح أي تطبيق غير مسموح به أو محاولة الدخول إلى إعدادات الهاتف لإيقاف التطبيق أثناء جلسة التركيز.",
+                        stepTitle = "الصلاحية 2: خدمات الوصول (Accessibility Service)",
+                        description = "ترصد فتح أي تطبيق غير مسموح به أثناء جلسة التركيز وتخرجه فورًا إلى الشاشة الرئيسية.",
                         instructions = "خطوات التفعيل (Infinix / XOS وأندرويد):\nالإعدادات > ميزات إضافية / إمكانية الوصول > التطبيقات المثبتة > Focus To-Do > تفعيل",
                         isGranted = permStatus.isAccessibilityServiceGranted,
                         buttonText = "تفعيل خدمة الوصول",

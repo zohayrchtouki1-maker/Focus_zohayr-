@@ -50,9 +50,11 @@ object FocusNotificationManager {
     const val CHANNEL_POMODORO_COMPLETE_SILENT = "pomodoro_complete_silent"
     const val CHANNEL_TASK_ALARMS = "task_alarms"
     const val CHANNEL_TASK_ALARMS_SILENT = "task_alarms_silent"
+    const val CHANNEL_AUTO_BACKUP = "auto_backup_status"
 
     const val NOTIFICATION_ID_ONGOING_TIMER = 9001
     const val NOTIFICATION_ID_TIMER_COMPLETE = 9002
+    const val NOTIFICATION_ID_AUTO_BACKUP = 9065
     const val EXTRA_OPEN_FULLSCREEN_TIMER = "extra_open_fullscreen_timer"
     const val CORAL_ACCENT_COLOR = 0xFFE05246.toInt()
     private const val REQUEST_CODE_TIMER_COMPLETE = 9100
@@ -134,13 +136,25 @@ object FocusNotificationManager {
             enableVibration(false)
         }
 
+        val autoBackupChannel = NotificationChannel(
+            CHANNEL_AUTO_BACKUP,
+            "Auto Backup Status / حالة النسخ الاحتياطي التلقائي",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Shows confirmation and details whenever automatic JSON backup runs"
+            setSound(null, null)
+            enableVibration(false)
+            lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+        }
+
         nm.createNotificationChannels(
             listOf(
                 ongoingChannel,
                 completeChannel,
                 completeSilentChannel,
                 taskAlarmsChannel,
-                taskAlarmsSilentChannel
+                taskAlarmsSilentChannel,
+                autoBackupChannel
             )
         )
     }
@@ -675,6 +689,44 @@ object FocusNotificationManager {
 
         try {
             nm.notify(9060, builder.build())
+        } catch (_: SecurityException) {
+        }
+    }
+
+    fun showAutoBackupSuccessNotification(
+        context: Context,
+        summary: ManualBackupExportSummary
+    ) {
+        if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
+        ensureChannelsCreated(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+
+        val title = "🔄 تم النسخ الاحتياطي التلقائي بنجاح"
+        val bigText = buildString {
+            appendLine("✅ اكتمل التحديث التلقائي للملف: ${summary.fileName}")
+            if (summary.updatedTimestamp.isNotBlank()) {
+                appendLine("🕒 وقت النسخ: ${summary.updatedTimestamp}")
+            }
+            appendLine("📝 المهام: ${summary.tasksCount} • ☑️ الفرعية: ${summary.subtasksCount}")
+            appendLine("📁 المشاريع: ${summary.projectsCount} • 🍅 الجلسات: ${summary.pomodoroSessionsCount}")
+            appendLine("⚙️ الإعدادات المحفوظة: ${summary.totalPrefsCount}")
+            append("💾 حجم الملف: ${summary.formattedFileSize}")
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_AUTO_BACKUP)
+            .setSmallIcon(R.drawable.ic_notification_timer)
+            .setColor(CORAL_ACCENT_COLOR)
+            .setContentTitle(title)
+            .setContentText("🕒 ${summary.updatedTimestamp} • 📝 ${summary.tasksCount} مهام • 💾 ${summary.formattedFileSize}")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setAutoCancel(true)
+
+        try {
+            nm.notify(NOTIFICATION_ID_AUTO_BACKUP, builder.build())
         } catch (_: SecurityException) {
         }
     }

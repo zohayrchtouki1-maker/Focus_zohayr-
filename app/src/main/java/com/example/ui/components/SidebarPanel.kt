@@ -125,6 +125,7 @@ fun SidebarPanel(
     onAddTag: (String, String) -> Unit,
     onDeleteTag: (String) -> Unit,
     onOpenCalendar: (() -> Unit)? = null,
+    onOpenTomatoAi: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showAddFolderDialog by remember { mutableStateOf(false) }
@@ -151,7 +152,7 @@ fun SidebarPanel(
     ) {
         // Top Bar (RTL):
         // Right side (Start in RTL): circular avatar (40dp) with small emerald status dot next to "النسخ الاحتياطي المحلي مفعل"
-        // Left side (End in RTL): minimal monochrome outline icons (22dp, #9E9EA9) for Statistics, Forest, and Settings
+        // Left side (End in RTL): minimal monochrome outline icons (22dp, #9E9EA9) for AI, Statistics, Forest, and Settings
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -208,6 +209,27 @@ fun SidebarPanel(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
+                IconButton(
+                    onClick = onOpenTomatoAi,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("nav_tomato_ai_button")
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 23.dp, height = 18.dp)
+                            .border(1.4.dp, topIconTint, RoundedCornerShape(5.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "AI",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = topIconTint,
+                            lineHeight = 10.sp
+                        )
+                    }
+                }
                 IconButton(
                     onClick = onOpenReports,
                     modifier = Modifier

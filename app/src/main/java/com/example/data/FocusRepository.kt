@@ -17,6 +17,7 @@ import com.example.model.FocusRecord
 import com.example.model.ManualBackupExportSummary
 import com.example.model.SubtaskItem
 import com.example.model.WhiteNoiseType
+import com.example.notifications.FocusNotificationManager
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
@@ -141,10 +142,10 @@ class FocusRepository(private val context: Context) {
             prefs.edit().putString(PREFS_STATE_KEY, json).commit()
         } catch (_: Exception) {
         }
-        performSilentAutoBackupInternal(json)
+        performSilentAutoBackupInternal(json, enriched)
     }
 
-    private fun performSilentAutoBackupInternal(json: String) {
+    private fun performSilentAutoBackupInternal(json: String, enriched: AppBackupState? = null) {
         try {
             val now = System.currentTimeMillis()
             prefs.edit().putLong(PREFS_LAST_AUTO_BACKUP_TIME, now).commit()
@@ -154,6 +155,20 @@ class FocusRepository(private val context: Context) {
                 overwriteExisting = true
             )
             removeLegacyAutoBackupFileIfPresent()
+
+            val bytesSize = json.toByteArray(Charsets.UTF_8).size.toLong()
+            val summary = ManualBackupExportSummary(
+                fileName = MASTER_BACKUP_FILE_NAME,
+                fileSizeBytes = bytesSize,
+                formattedFileSize = formatFileSize(bytesSize),
+                projectsCount = enriched?.projects?.size ?: 0,
+                tasksCount = enriched?.tasks?.size ?: 0,
+                subtasksCount = enriched?.subtasks?.size ?: 0,
+                pomodoroSessionsCount = enriched?.pomodoroSessions?.size ?: 0,
+                totalPrefsCount = enriched?.allPreferences?.values?.sumOf { it.size } ?: 0,
+                updatedTimestamp = formatBackupTimestamp(now, true)
+            )
+            FocusNotificationManager.showAutoBackupSuccessNotification(context, summary)
         } catch (_: Exception) {
         }
     }
@@ -382,7 +397,10 @@ class FocusRepository(private val context: Context) {
                 known.projects.size > reconciled.projects.size ||
                 known.focusRecords.size > reconciled.focusRecords.size
             ) {
-                reconciled = mergeBackupStates(reconciled, known)
+                reconciled = mergeBackupStates(known, reconciled).copy(
+                    settings = state.settings,
+                    persistedTimer = state.persistedTimer ?: known.persistedTimer
+                )
             }
         }
         syncSettingsToExplicitPreferences(reconciled.settings)
