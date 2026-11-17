@@ -250,7 +250,9 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             phase = t.phase,
             strictMode = isStrict,
             timerEndTimeEpochMillis = t.timerEndTimeEpochMillis,
-            countMode = t.countMode
+            countMode = t.countMode,
+            activeTaskTitle = activeTaskOrDefaultTitle(),
+            stopwatchStartTimeEpochMillis = t.stopwatchStartTimeEpochMillis
         )
     }
 

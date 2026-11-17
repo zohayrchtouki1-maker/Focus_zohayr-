@@ -1,11 +1,15 @@
 package com.example.ui.components
 
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,6 +36,7 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -40,7 +45,6 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -70,6 +74,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.blocker.FocusDeviceAdminReceiver
 import com.example.blocker.InstalledAppInfo
 import com.example.blocker.StrictAppBlockerManager
 import com.example.model.TimerPhase
@@ -110,6 +115,18 @@ fun StrictBlockerSetupDialog(
     var isLoadingApps by remember { mutableStateOf(true) }
     var lockWarningBanner by remember { mutableStateOf<String?>(null) }
 
+    val deviceAdminLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        onRefreshBlockerPermissions()
+    }
+
+    val overlayPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        onRefreshBlockerPermissions()
+    }
+
     // Refresh permissions whenever returning from Android Settings / Device Admin screen
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -140,15 +157,13 @@ fun StrictBlockerSetupDialog(
                     it.packageName.contains(q, ignoreCase = true)
             }
         }
-        // Show whitelisted apps first so user can immediately see their allowed list
         base.sortedWith(
             compareByDescending<InstalledAppInfo> { it.packageName in whitelistedPackages }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.appName }
         )
     }
 
-    val isFullyReadyAndArmed =
-        permStatus.isDeviceAdminGranted && permStatus.isAccessibilityServiceGranted && isStrictEnabled
+    val isFullyReadyAndArmed = permStatus.isFullyReady && isStrictEnabled
 
     Surface(
         modifier = Modifier
@@ -198,7 +213,7 @@ fun StrictBlockerSetupDialog(
                         color = DarkTextPrimary
                     )
                     Text(
-                        text = "قفل الشاشة فورًا ومنع جميع التطبيقات ما عدا القائمة المسموحة",
+                        text = "حماية ثلاثية الطبقات: رصد فوري + درع تغطية كامل + منع حذف التطبيق",
                         fontSize = 11.sp,
                         color = DarkTextSecondary
                     )
@@ -232,7 +247,7 @@ fun StrictBlockerSetupDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                // Live Readiness Badge when both permissions are granted and Strict Mode is ON
+                // Live Readiness Badge when all permissions are granted and Strict Mode is ON
                 if (isFullyReadyAndArmed) {
                     item {
                         Surface(
@@ -313,7 +328,7 @@ fun StrictBlockerSetupDialog(
                                         text = if (isFocusSessionActivelyRunning && isStrictEnabled) {
                                             "🔒 جلسة التركيز جارية الآن — لا يمكن إيقاف الحظر حتى ينتهي المؤقت"
                                         } else {
-                                            "قفل الهاتف فورًا عند فتح أي تطبيق غير موجود في القائمة المسموحة (بما في ذلك الإعدادات)"
+                                            "حظر فوري ودرع شاشة كاملة لأي تطبيق غير موجود في القائمة المسموحة (بما في ذلك الإعدادات)"
                                         },
                                         fontSize = 11.sp,
                                         color = if (isFocusSessionActivelyRunning && isStrictEnabled) {
@@ -380,26 +395,66 @@ fun StrictBlockerSetupDialog(
                     }
                 }
 
-                // Card 1: الصلاحية 1: مشرف الجهاز (Device Admin)
+                // Card 1: الصلاحية 1: مشرف الجهاز (Device Admin — Anti-Uninstall Protection)
                 item {
                     PermissionGateCard(
                         stepTitle = "الصلاحية 1: مشرف الجهاز (Device Admin)",
-                        description = "تسمح للتطبيق بقفل شاشة الهاتف فورًا (lockNow) في نفس اللحظة التي تحاول فيها فتح تطبيق محظور أثناء جلسة التركيز.",
+                        description = "تمنع حذف التطبيق أو تعطيل الحماية الصارمة أثناء سريان جلسات التركيز.",
                         instructions = null,
                         isGranted = permStatus.isDeviceAdminGranted,
                         buttonText = "تفعيل مشرف الجهاز",
                         icon = Icons.Default.AdminPanelSettings,
                         buttonTestTag = "enable_device_admin_button",
                         onActionClick = {
-                            StrictAppBlockerManager.openDeviceAdminActivation(context)
+                            val componentName = ComponentName(context, FocusDeviceAdminReceiver::class.java)
+                            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, componentName)
+                                putExtra(
+                                    DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                                    "مطلوب لمنع حذف التطبيق أو تجاوز الحظر الصارم أثناء جلسات التركيز."
+                                )
+                            }
+                            try {
+                                deviceAdminLauncher.launch(intent)
+                            } catch (_: Exception) {
+                                try {
+                                    context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                } catch (_: Exception) {
+                                    StrictAppBlockerManager.openDeviceAdminActivation(context)
+                                }
+                            }
                         }
                     )
                 }
 
-                // Card 2: الصلاحية 2: خدمات الوصول (Accessibility Service)
+                // Card 2: الصلاحية 2: الظهور فوق التطبيقات (Full-Screen Blocking Overlay Shield)
                 item {
                     PermissionGateCard(
-                        stepTitle = "الصلاحية 2: خدمات الوصول (Accessibility Service)",
+                        stepTitle = "الصلاحية 2: الظهور فوق التطبيقات (Overlay Shield)",
+                        description = "تُظهر شاشة حظر كاملة غير قابلة للتجاوز مع العد التنازلي للمؤقت فور محاولة فتح أي تطبيق محظور.",
+                        instructions = null,
+                        isGranted = permStatus.isOverlayPermissionGranted,
+                        buttonText = "تفعيل الظهور فوق التطبيقات",
+                        icon = Icons.Default.Layers,
+                        buttonTestTag = "enable_overlay_permission_button",
+                        onActionClick = {
+                            try {
+                                val intent = Intent(
+                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    android.net.Uri.parse("package:${context.packageName}")
+                                )
+                                overlayPermissionLauncher.launch(intent)
+                            } catch (_: Exception) {
+                                StrictAppBlockerManager.openOverlayPermissionSettings(context)
+                            }
+                        }
+                    )
+                }
+
+                // Card 3: الصلاحية 3: خدمات الوصول (Accessibility Service)
+                item {
+                    PermissionGateCard(
+                        stepTitle = "الصلاحية 3: خدمات الوصول (Accessibility Service)",
                         description = "ترصد فتح أي تطبيق غير مسموح به أو محاولة الدخول إلى إعدادات الهاتف لإيقاف التطبيق أثناء جلسة التركيز.",
                         instructions = "خطوات التفعيل (Infinix / XOS وأندرويد):\nالإعدادات > ميزات إضافية / إمكانية الوصول > التطبيقات المثبتة > Focus To-Do > تفعيل",
                         isGranted = permStatus.isAccessibilityServiceGranted,

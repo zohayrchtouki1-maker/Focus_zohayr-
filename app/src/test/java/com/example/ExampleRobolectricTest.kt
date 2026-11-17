@@ -313,20 +313,44 @@ class ExampleRobolectricTest {
         )
 
         assertTrue(com.example.blocker.StrictAppBlockerManager.isStrictFocusSessionActivelyRunning(context))
-        // Focus_zohayr itself is allowed
+        // Safe-System Exclusion List: Focus_zohayr, SystemUI, android, XOSLauncher, launcher3, Dialer are NEVER blocked
         assertEquals(
             false,
             com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, context.packageName)
+        )
+        assertEquals(
+            false,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.android.systemui")
+        )
+        assertEquals(
+            false,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "android")
+        )
+        assertEquals(
+            false,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.transsion.XOSLauncher")
+        )
+        assertEquals(
+            false,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.android.launcher3")
+        )
+        assertEquals(
+            false,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.google.android.dialer")
         )
         // Whitelisted app is allowed
         assertEquals(
             false,
             com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.whatsapp")
         )
-        // Android Settings is strictly blocked during active focus
+        // Android Settings, Package Installers, and Phone Manager are strictly blocked during active focus
         assertEquals(
             true,
             com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.android.settings")
+        )
+        assertEquals(
+            true,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.transsion.phonemanager")
         )
         // Non-whitelisted third-party app is strictly blocked
         assertEquals(

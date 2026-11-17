@@ -13,7 +13,6 @@ class FocusBlockerAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastEnforcementMillis: Long = 0L
-    private var pendingLauncherBounceRunnable: Runnable? = null
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
@@ -23,74 +22,50 @@ class FocusBlockerAccessibilityService : AccessibilityService() {
         if (pkg.isBlank()) return
 
         val appCtx = applicationContext
+
+        // If focus session is not actively running, ensure overlay is dismissed and return immediately
         if (!StrictAppBlockerManager.isStrictFocusSessionActivelyRunning(appCtx)) {
-            cancelPendingLauncherBounce()
+            StrictBlockingOverlayController.dismissOverlay(appCtx)
             return
         }
 
-        // If user returns to Focus_zohayr or a whitelisted app, cancel any pending launcher bounce
+        // If user returned to Focus_zohayr or an explicitly whitelisted app, dismiss the blocking overlay
         if (pkg == appCtx.packageName || pkg in StrictAppBlockerManager.getWhitelistedPackages(appCtx)) {
-            cancelPendingLauncherBounce()
+            StrictBlockingOverlayController.dismissOverlay(appCtx)
             return
         }
 
-        // If user lands on the Launcher Home Screen during a strict focus session,
-        // allow it only briefly (160ms) to bounce right back to Focus_zohayr so apps cannot be launched
-        if (StrictAppBlockerManager.isLauncherHomePackage(appCtx, pkg)) {
-            scheduleLauncherBounceBack()
+        // Never block or trigger on the Safe-System Exclusion List (SystemUI, Home Launcher, Dialer, Keyboard)
+        if (StrictAppBlockerManager.isSafeSystemExcludedPackage(appCtx, pkg)) {
             return
         }
 
-        // Default-Deny Whitelist Enforcement: check if foreground package is blocked
+        // Exact Trigger Condition: non-whitelisted app (or Settings / Package Installer / Phone Manager)
         if (StrictAppBlockerManager.shouldBlockPackageImmediately(appCtx, pkg)) {
-            cancelPendingLauncherBounce()
-            enforceImmediateBlockAndScreenLock(pkg)
+            enforceDualOverlayAndBounceBack(pkg)
         }
     }
 
-    private fun scheduleLauncherBounceBack() {
-        cancelPendingLauncherBounce()
-        val runnable = Runnable {
-            val appCtx = applicationContext
-            if (StrictAppBlockerManager.isStrictFocusSessionActivelyRunning(appCtx)) {
-                relaunchFocusAppToFront(showWarningToast = false)
-            }
-        }
-        pendingLauncherBounceRunnable = runnable
-        mainHandler.postDelayed(runnable, 160L)
-    }
-
-    private fun cancelPendingLauncherBounce() {
-        pendingLauncherBounceRunnable?.let { mainHandler.removeCallbacks(it) }
-        pendingLauncherBounceRunnable = null
-    }
-
-    private fun enforceImmediateBlockAndScreenLock(blockedPackage: String) {
+    private fun enforceDualOverlayAndBounceBack(blockedPackage: String) {
         val now = System.currentTimeMillis()
         val appCtx = applicationContext
 
-        // 1. Immediately call DevicePolicyManager.lockNow() (if Device Admin is active)
-        //    to instantly turn off and lock the phone screen
-        StrictAppBlockerManager.lockScreenNowIfDeviceAdminActive(appCtx)
+        // 1. Show the unbypassable Full-Screen Blocking Overlay (WindowManager TYPE_APPLICATION_OVERLAY)
+        StrictBlockingOverlayController.showOverlay(appCtx, blockedPackage)
 
-        // 2. Simultaneously fire GLOBAL_ACTION_HOME so the blocked app is immediately dismissed
+        // 2. Immediately bounce the user back to Focus_zohayr
         try {
             performGlobalAction(GLOBAL_ACTION_HOME)
         } catch (_: Exception) {
         }
 
-        // 3. Bring Focus_zohayr back to the front and show the strict mode warning toast/banner
-        val shouldShowToast = (now - lastEnforcementMillis) > 900L
+        val shouldShowToast = (now - lastEnforcementMillis) > 1000L
         lastEnforcementMillis = now
 
         StrictAppBlockerManager.notifyBlockedAttempt(blockedPackage)
-        relaunchFocusAppToFront(showWarningToast = shouldShowToast)
-    }
 
-    private fun relaunchFocusAppToFront(showWarningToast: Boolean) {
-        val appCtx = applicationContext
         mainHandler.post {
-            if (showWarningToast) {
+            if (shouldShowToast) {
                 try {
                     Toast.makeText(
                         appCtx,
@@ -101,28 +76,27 @@ class FocusBlockerAccessibilityService : AccessibilityService() {
                 }
             }
             try {
-                val launchIntent = Intent(appCtx, MainActivity::class.java).apply {
+                val launchIntent = Intent(this@FocusBlockerAccessibilityService, MainActivity::class.java).apply {
                     addFlags(
                         Intent.FLAG_ACTIVITY_NEW_TASK or
                             Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
                     )
                     putExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER, true)
                     putExtra(StrictAppBlockerManager.EXTRA_STRICT_BLOCK_TRIGGERED, true)
                 }
-                appCtx.startActivity(launchIntent)
+                startActivity(launchIntent)
             } catch (_: Exception) {
             }
         }
     }
 
     override fun onInterrupt() {
-        cancelPendingLauncherBounce()
+        StrictBlockingOverlayController.dismissOverlay(applicationContext)
     }
 
     override fun onDestroy() {
-        cancelPendingLauncherBounce()
+        StrictBlockingOverlayController.dismissOverlay(applicationContext)
         super.onDestroy()
     }
 }

@@ -12,7 +12,7 @@ class FocusDeviceAdminReceiver : DeviceAdminReceiver() {
         try {
             Toast.makeText(
                 context,
-                "✅ تم تفعيل صلاحية مشرف الجهاز للحظر الصارم بنجاح",
+                "✅ تم تفعيل مشرف الجهاز لحماية التطبيق من الحذف أثناء التركيز",
                 Toast.LENGTH_SHORT
             ).show()
         } catch (_: Exception) {
@@ -20,7 +20,7 @@ class FocusDeviceAdminReceiver : DeviceAdminReceiver() {
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
-        return "⚠️ تحذير: إلغاء مشرف الجهاز سيعطّل الحماية الصارمة لقفل الشاشة أثناء التركيز."
+        return "⚠️ تحذير: إلغاء مشرف الجهاز سيسمح بحذف التطبيق وكسر الحماية الصارمة."
     }
 
     override fun onDisabled(context: Context, intent: Intent) {

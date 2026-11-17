@@ -10,8 +10,10 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.telecom.TelecomManager
 import android.view.accessibility.AccessibilityManager
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.graphics.ImageBitmap
@@ -24,6 +26,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
+import java.util.Locale
+import kotlin.math.ceil
+import kotlin.math.max
 
 data class InstalledAppInfo(
     val packageName: String,
@@ -33,10 +38,11 @@ data class InstalledAppInfo(
 
 data class StrictBlockerPermissionStatus(
     val isDeviceAdminGranted: Boolean = false,
+    val isOverlayPermissionGranted: Boolean = false,
     val isAccessibilityServiceGranted: Boolean = false
 ) {
     val isFullyReady: Boolean
-        get() = isDeviceAdminGranted && isAccessibilityServiceGranted
+        get() = isDeviceAdminGranted && isOverlayPermissionGranted && isAccessibilityServiceGranted
 }
 
 object StrictAppBlockerManager {
@@ -44,7 +50,9 @@ object StrictAppBlockerManager {
     const val KEY_WHITELISTED_PACKAGES = "strict_blocker_whitelisted_packages"
     const val KEY_ACTIVE_FOCUS_SESSION_RUNNING = "strict_focus_session_active"
     const val KEY_ACTIVE_FOCUS_SESSION_END_MILLIS = "strict_focus_session_end_millis"
+    const val KEY_ACTIVE_FOCUS_SESSION_START_MILLIS = "strict_focus_session_start_millis"
     const val KEY_ACTIVE_FOCUS_IS_STOPWATCH = "strict_focus_session_is_stopwatch"
+    const val KEY_ACTIVE_FOCUS_TASK_TITLE = "strict_focus_task_title"
 
     const val EXTRA_STRICT_BLOCK_TRIGGERED = "extra_strict_block_triggered"
     const val STRICT_BLOCK_MESSAGE_AR = "🔒 الوضع الصارم مفعل! ممنوع فتح التطبيقات حتى تنتهي جلسة التركيز"
@@ -55,28 +63,36 @@ object StrictAppBlockerManager {
     @Volatile
     private var cachedInstalledApps: List<InstalledAppInfo>? = null
 
-    // Always-blocked system settings & package management apps during active strict focus
+    // Always-blocked system settings, package installers, and phone managers during active strict focus
+    // so permissions cannot be revoked or the app force-stopped during a session.
     private val STRICTLY_FORBIDDEN_PACKAGES = setOf(
         "com.android.settings",
         "com.android.packageinstaller",
         "com.google.android.packageinstaller",
         "com.miui.packageinstaller",
         "com.transsion.packageinstaller",
+        "com.transsion.phonemanager",
         "com.android.permissioncontroller",
         "com.google.android.permissioncontroller"
     )
 
-    // Essential system UI & emergency/phone dialer packages allowed so the device remains safe
-    private val ESSENTIAL_SYSTEM_PACKAGES = setOf(
+    // Static Safe-System Exclusion List (NEVER block or trigger on these)
+    private val STATIC_SAFE_SYSTEM_EXCLUSIONS = setOf(
         "android",
         "com.android.systemui",
+        "com.transsion.XOSLauncher",
+        "com.transsion.hilauncher",
+        "com.android.launcher",
+        "com.android.launcher3",
+        "com.google.android.apps.nexuslauncher",
+        "com.sec.android.app.launcher",
+        "com.miui.home",
         "com.android.incallui",
-        "com.android.dialer",
         "com.google.android.dialer",
+        "com.android.dialer",
         "com.android.phone",
         "com.android.server.telecom",
-        "com.sh.smart.caller",
-        "com.transsion.smartmessage"
+        "com.sh.smart.caller"
     )
 
     fun notifyBlockedAttempt(packageName: String) {
@@ -124,7 +140,9 @@ object StrictAppBlockerManager {
         phase: TimerPhase,
         strictMode: Boolean,
         timerEndTimeEpochMillis: Long?,
-        countMode: TimerCountMode
+        countMode: TimerCountMode,
+        activeTaskTitle: String = "جلسة تركيز",
+        stopwatchStartTimeEpochMillis: Long? = null
     ) {
         val isFocusRunning = isRunning && phase == TimerPhase.FOCUS
         val isStopwatch = countMode == TimerCountMode.STOPWATCH
@@ -133,14 +151,42 @@ object StrictAppBlockerManager {
         } else {
             0L
         }
+        val startMillis = stopwatchStartTimeEpochMillis ?: System.currentTimeMillis()
         val editor = getPrefs(context).edit()
             .putBoolean(KEY_ACTIVE_FOCUS_SESSION_RUNNING, isFocusRunning)
             .putLong(KEY_ACTIVE_FOCUS_SESSION_END_MILLIS, endMillis)
+            .putLong(KEY_ACTIVE_FOCUS_SESSION_START_MILLIS, startMillis)
             .putBoolean(KEY_ACTIVE_FOCUS_IS_STOPWATCH, isStopwatch)
+            .putString(KEY_ACTIVE_FOCUS_TASK_TITLE, activeTaskTitle.ifBlank { "جلسة تركيز" })
         if (strictMode) {
             editor.putBoolean(KEY_STRICT_BLOCKER_ENABLED, true)
         }
         editor.commit()
+
+        if (!isFocusRunning) {
+            StrictBlockingOverlayController.dismissOverlay(context)
+        }
+    }
+
+    fun getActiveFocusTaskTitle(context: Context): String {
+        return getPrefs(context).getString(KEY_ACTIVE_FOCUS_TASK_TITLE, "جلسة تركيز")
+            ?.ifBlank { "جلسة تركيز" } ?: "جلسة تركيز"
+    }
+
+    fun getFormattedRemainingFocusTime(context: Context): String {
+        val sp = getPrefs(context)
+        val isStopwatch = sp.getBoolean(KEY_ACTIVE_FOCUS_IS_STOPWATCH, false)
+        val now = System.currentTimeMillis()
+        val totalSeconds = if (isStopwatch) {
+            val start = sp.getLong(KEY_ACTIVE_FOCUS_SESSION_START_MILLIS, now)
+            max(0, ((now - start) / 1000L).toInt())
+        } else {
+            val end = sp.getLong(KEY_ACTIVE_FOCUS_SESSION_END_MILLIS, 0L)
+            max(0, ceil((end - now) / 1000.0).toInt())
+        }
+        val mins = totalSeconds / 60
+        val secs = totalSeconds % 60
+        return String.format(Locale.ENGLISH, "%02d:%02d", mins, secs)
     }
 
     fun isStrictFocusSessionActivelyRunning(context: Context): Boolean {
@@ -158,16 +204,20 @@ object StrictAppBlockerManager {
     }
 
     fun getDeviceAdminComponent(context: Context): ComponentName {
-        return ComponentName(context.applicationContext, FocusDeviceAdminReceiver::class.java)
+        return ComponentName(context, FocusDeviceAdminReceiver::class.java)
     }
 
     fun isDeviceAdminActive(context: Context): Boolean {
         return try {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
-            dpm?.isAdminActive(getDeviceAdminComponent(context)) == true
+            dpm?.isAdminActive(ComponentName(context.applicationContext, FocusDeviceAdminReceiver::class.java)) == true
         } catch (_: Exception) {
             false
         }
+    }
+
+    fun isOverlayPermissionGranted(context: Context): Boolean {
+        return StrictBlockingOverlayController.canDrawOverlays(context)
     }
 
     fun isAccessibilityServiceEnabled(context: Context): Boolean {
@@ -203,16 +253,18 @@ object StrictAppBlockerManager {
     fun getPermissionStatus(context: Context): StrictBlockerPermissionStatus {
         return StrictBlockerPermissionStatus(
             isDeviceAdminGranted = isDeviceAdminActive(context),
+            isOverlayPermissionGranted = isOverlayPermissionGranted(context),
             isAccessibilityServiceGranted = isAccessibilityServiceEnabled(context)
         )
     }
 
     fun createEnableDeviceAdminIntent(context: Context): Intent {
+        val componentName = ComponentName(context, FocusDeviceAdminReceiver::class.java)
         return Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, getDeviceAdminComponent(context))
+            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, componentName)
             putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                "يلزم تفعيل مشرف الجهاز لقفل الشاشة فورًا ومنع فتح التطبيقات غير المسموح بها أثناء جلسات التركيز الصارمة."
+                "مطلوب لمنع حذف التطبيق أو تجاوز الحظر الصارم أثناء جلسات التركيز."
             )
         }
     }
@@ -234,6 +286,26 @@ object StrictAppBlockerManager {
         }
     }
 
+    fun openOverlayPermissionSettings(context: Context) {
+        try {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                val fallback = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(fallback)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     fun openAccessibilitySettings(context: Context) {
         try {
             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
@@ -244,86 +316,101 @@ object StrictAppBlockerManager {
         }
     }
 
-    fun isLauncherHomePackage(context: Context, packageName: String): Boolean {
-        if (packageName.isBlank()) return false
-        val knownLaunchers = setOf(
-            "com.transsion.XOSLauncher",
-            "com.transsion.hilauncher",
-            "com.android.launcher",
-            "com.android.launcher3",
-            "com.google.android.apps.nexuslauncher",
-            "com.sec.android.app.launcher",
-            "com.miui.home"
-        )
-        if (packageName in knownLaunchers) return true
-        return try {
+    /**
+     * Checks the Strict Safe-System Exclusion List (NEVER block or trigger on these):
+     * - context.packageName ("com.aistudio.focustodo.arpmzq")
+     * - "com.android.systemui"
+     * - "android"
+     * - Active default Home Launcher (resolved dynamically + XOSLauncher / launcher3)
+     * - Default Phone / Dialer & Emergency packages (TelecomManager.getDefaultDialerPackage(), incallui, google dialer)
+     * - Active Input Method / Keyboard packages (Settings.Secure.DEFAULT_INPUT_METHOD + InputMethodManager)
+     */
+    fun isSafeSystemExcludedPackage(context: Context, packageName: String): Boolean {
+        if (packageName.isBlank()) return true
+        // Explicitly forbidden packages (Settings, Package Installers, Phone Manager) are NEVER excluded
+        if (packageName in STRICTLY_FORBIDDEN_PACKAGES) return false
+
+        if (packageName == context.packageName) return true
+        if (packageName in STATIC_SAFE_SYSTEM_EXCLUSIONS) return true
+
+        // Resolve active default Home Launcher dynamically
+        try {
             val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-            val resolves = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.packageManager.queryIntentActivities(
+            val resolvedHome = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.resolveActivity(
                     homeIntent,
                     PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong())
-                )
+                )?.activityInfo?.packageName
             } else {
                 @Suppress("DEPRECATION")
-                context.packageManager.queryIntentActivities(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                context.packageManager.resolveActivity(
+                    homeIntent,
+                    PackageManager.MATCH_DEFAULT_ONLY
+                )?.activityInfo?.packageName
             }
-            resolves.any { it.activityInfo?.packageName == packageName }
+            if (!resolvedHome.isNullOrBlank() && resolvedHome == packageName) {
+                return true
+            }
         } catch (_: Exception) {
-            false
         }
-    }
 
-    private fun isInputMethodPackage(context: Context, packageName: String): Boolean {
-        return try {
-            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.enabledInputMethodList?.any { it.packageName == packageName } == true
+        // Resolve default Phone / Dialer package dynamically
+        try {
+            val telecom = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
+            val defaultDialer = telecom?.defaultDialerPackage
+            if (!defaultDialer.isNullOrBlank() && defaultDialer == packageName) {
+                return true
+            }
         } catch (_: Exception) {
-            false
         }
+
+        // Resolve active Input Method / Keyboard package dynamically
+        try {
+            val defaultIme = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.DEFAULT_INPUT_METHOD
+            ).orEmpty()
+            val imePkg = defaultIme.substringBefore('/')
+            if (imePkg.isNotBlank() && imePkg == packageName) {
+                return true
+            }
+        } catch (_: Exception) {
+        }
+
+        try {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            if (imm?.enabledInputMethodList?.any { it.packageName == packageName } == true) {
+                return true
+            }
+        } catch (_: Exception) {
+        }
+
+        return false
     }
 
     /**
-     * Evaluates whether [foregroundPackage] must be immediately blocked and screen-locked
-     * under Default-Deny Whitelist Mode during an active Focus session.
+     * Exact Trigger Condition:
+     * Trigger enforcement ONLY when Strict Mode is ON, a Pomodoro Work/Focus session is actively
+     * counting down, [foregroundPackage] is NOT in the Safe-System Exclusion List, AND
+     * [foregroundPackage] is NOT in the user's selected whitelistedPackages set (while always
+     * blocking com.android.settings, package installers, and com.transsion.phonemanager).
      */
     fun shouldBlockPackageImmediately(context: Context, foregroundPackage: String): Boolean {
         if (foregroundPackage.isBlank()) return false
         if (!isStrictFocusSessionActivelyRunning(context)) return false
 
-        // 1. Focus_zohayr itself is always allowed
-        if (foregroundPackage == context.packageName) return false
-
-        // 2. Android Settings & Package Installers are ALWAYS blocked during strict focus
-        //    to prevent force-stopping, revoking Accessibility, or deactivating Device Admin
+        // Always block Settings, Package Installers, and Phone Manager during active strict focus
         if (foregroundPackage in STRICTLY_FORBIDDEN_PACKAGES) return true
 
-        // 3. User-whitelisted apps are allowed
+        // Never block or trigger on the Safe-System Exclusion List (Focus_zohayr, SystemUI, Home Launcher, Dialer, Keyboard)
+        if (isSafeSystemExcludedPackage(context, foregroundPackage)) return false
+
+        // Never block user-whitelisted apps
         val whitelisted = getWhitelistedPackages(context)
         if (foregroundPackage in whitelisted) return false
 
-        // 4. Essential system UI, emergency/phone dialer, and active keyboard IMEs are allowed
-        if (foregroundPackage in ESSENTIAL_SYSTEM_PACKAGES) return false
-        if (isInputMethodPackage(context, foregroundPackage)) return false
-
-        // 5. Launcher home screen is handled with immediate bounce-back to Focus_zohayr
-        if (isLauncherHomePackage(context, foregroundPackage)) return false
-
-        // 6. Default-Deny: EVERY other app on the device is strictly blocked!
+        // Default-Deny: block every other non-whitelisted app
         return true
-    }
-
-    fun lockScreenNowIfDeviceAdminActive(context: Context): Boolean {
-        return try {
-            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
-            if (dpm != null && dpm.isAdminActive(getDeviceAdminComponent(context))) {
-                dpm.lockNow()
-                true
-            } else {
-                false
-            }
-        } catch (_: Exception) {
-            false
-        }
     }
 
     suspend fun loadInstalledLaunchableApps(
@@ -353,10 +440,7 @@ object StrictAppBlockerManager {
             emptyList()
         }
 
-        val excludedSelfAndSettings = setOf(
-            context.packageName,
-            "com.android.settings"
-        )
+        val excludedSelfAndSettings = STRICTLY_FORBIDDEN_PACKAGES + context.packageName
 
         val appsByPackage = linkedMapOf<String, InstalledAppInfo>()
         for (ri in resolveInfos) {
