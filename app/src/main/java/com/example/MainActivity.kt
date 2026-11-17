@@ -429,6 +429,9 @@ fun FocusTodoAppRoot(
                         onExportManualBackupToDocuments = { onResult ->
                             viewModel.exportManualBackupToDocuments(onResult)
                         },
+                        onExportManualBackupWithSummary = { onResult ->
+                            viewModel.exportManualBackupWithSummary(onResult)
+                        },
                         onCreateShareableBackupFile = { viewModel.createShareableBackupFile() },
                         onParseBackupPreview = { viewModel.parseBackupPreview(it) },
                         onImportBackupState = { parsed, mode -> viewModel.importBackupState(parsed, mode) },

@@ -76,7 +76,20 @@ enum class ReportPeriod {
 data class SubtaskItem(
     val id: String = UUID.randomUUID().toString(),
     val title: String,
-    val isDone: Boolean = false
+    val isDone: Boolean = false,
+    val parentTaskId: String? = null,
+    val sortOrder: Int = 0,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@JsonClass(generateAdapter = true)
+data class ExportedSubtaskItem(
+    val id: String,
+    val parentTaskId: String,
+    val title: String,
+    val isCompleted: Boolean,
+    val sortOrder: Int = 0,
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 @JsonClass(generateAdapter = true)
@@ -99,14 +112,18 @@ data class TaskItem(
     val subtasks: List<SubtaskItem> = emptyList(),
     val isCompleted: Boolean = false,
     val completedAtEpochMillis: Long? = null,
-    val createdAtEpochMillis: Long = System.currentTimeMillis()
+    val createdAtEpochMillis: Long = System.currentTimeMillis(),
+    val updatedAtEpochMillis: Long = System.currentTimeMillis(),
+    val sortOrder: Int = 0
 )
 
 @JsonClass(generateAdapter = true)
 data class FolderItem(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val isExpanded: Boolean = true
+    val isExpanded: Boolean = true,
+    val sortOrder: Int = 0,
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 @JsonClass(generateAdapter = true)
@@ -115,7 +132,12 @@ data class ProjectItem(
     val name: String,
     val colorHex: String = "#E05246",
     val folderId: String? = null,
-    val isArchived: Boolean = false
+    val isArchived: Boolean = false,
+    val iconName: String = "folder",
+    val sortOrder: Int = 0,
+    val isDefault: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @JsonClass(generateAdapter = true)
@@ -133,7 +155,36 @@ data class FocusRecord(
     val projectId: String? = null,
     val startedAtEpochMillis: Long,
     val durationMinutes: Int,
-    val isStopwatch: Boolean = false
+    val isStopwatch: Boolean = false,
+    val sessionType: String = "FOCUS",
+    val endTimeEpochMillis: Long = startedAtEpochMillis + durationMinutes * 60_000L,
+    val durationSeconds: Int = durationMinutes * 60,
+    val wasCompleted: Boolean = true,
+    val dateKey: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class ExportedFocusStats(
+    val totalFocusMinutes: Int = 0,
+    val totalFocusSeconds: Int = 0,
+    val totalPomodoroSessions: Int = 0,
+    val totalCompletedTasks: Int = 0,
+    val totalActiveTasks: Int = 0,
+    val totalSubtasks: Int = 0,
+    val completedSubtasks: Int = 0,
+    val dailyMinutesByDateKey: Map<String, Int> = emptyMap()
+)
+
+@JsonClass(generateAdapter = true)
+data class ExportedPrefEntry(
+    val key: String,
+    val type: String,
+    val stringValue: String? = null,
+    val intValue: Int? = null,
+    val longValue: Long? = null,
+    val floatValue: Float? = null,
+    val booleanValue: Boolean? = null,
+    val stringSetValue: List<String>? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -192,12 +243,29 @@ data class AppSettings(
 
 @JsonClass(generateAdapter = true)
 data class AppBackupState(
+    val backupVersion: Int = 3,
+    val exportedAt: Long = System.currentTimeMillis(),
     val tasks: List<TaskItem> = emptyList(),
+    val subtasks: List<ExportedSubtaskItem> = emptyList(),
     val projects: List<ProjectItem> = emptyList(),
     val folders: List<FolderItem> = emptyList(),
     val tags: List<TagItem> = emptyList(),
     val focusRecords: List<FocusRecord> = emptyList(),
+    val pomodoroSessions: List<FocusRecord> = emptyList(),
+    val focusStats: ExportedFocusStats = ExportedFocusStats(),
     val settings: AppSettings = AppSettings(),
+    val allPreferences: Map<String, List<ExportedPrefEntry>> = emptyMap(),
     val forestState: ForestState = ForestState(),
     val persistedTimer: PersistedTimerState? = null
+)
+
+data class ManualBackupExportSummary(
+    val fileName: String,
+    val fileSizeBytes: Long,
+    val formattedFileSize: String,
+    val projectsCount: Int,
+    val tasksCount: Int,
+    val subtasksCount: Int,
+    val pomodoroSessionsCount: Int,
+    val totalPrefsCount: Int
 )

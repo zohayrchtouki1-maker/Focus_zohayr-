@@ -83,6 +83,7 @@ import com.example.i18n.Strings
 import com.example.model.AppBackupState
 import com.example.model.AppLanguage
 import com.example.model.AppSettings
+import com.example.model.ManualBackupExportSummary
 import com.example.notifications.FocusNotificationManager
 import com.example.notifications.SystemPermissionsHelper
 import com.example.ui.theme.CoralPrimary
@@ -111,6 +112,7 @@ fun SettingsDialog(
     onOpenBackgroundPermissionsModal: () -> Unit,
     onExportJson: () -> String,
     onExportManualBackupToDocuments: ((Result<String>) -> Unit) -> Unit = {},
+    onExportManualBackupWithSummary: ((Result<ManualBackupExportSummary>) -> Unit) -> Unit = {},
     onCreateShareableBackupFile: () -> File,
     onParseBackupPreview: (String) -> AppBackupState?,
     onImportBackupState: (AppBackupState, BackupImportMode) -> Unit,
@@ -125,6 +127,7 @@ fun SettingsDialog(
     var backupFeedback by remember { mutableStateOf<String?>(null) }
     var backupIsError by remember { mutableStateOf(false) }
     var pendingImportState by remember { mutableStateOf<AppBackupState?>(null) }
+    var exportSummaryDialogData by remember { mutableStateOf<ManualBackupExportSummary?>(null) }
 
     // 3x Consecutive Failure Warning State (1/3 -> 2/3 -> 3/3)
     var failureWarningStep by remember { mutableIntStateOf(0) }
@@ -152,16 +155,23 @@ fun SettingsDialog(
 
     fun triggerManualExportNow() {
         try {
-            onExportManualBackupToDocuments { result ->
+            onExportManualBackupWithSummary { result ->
                 result.fold(
-                    onSuccess = { createdFileName ->
+                    onSuccess = { summary ->
                         backupIsError = false
-                        val msg = "تم حفظ النسخة الاحتياطية بنجاح في مجلد Documents/Focus_Zohayr ($createdFileName)"
+                        exportSummaryDialogData = summary
+                        val msg = "✅ تم النسخ الاحتياطي الشامل بنجاح! (${summary.fileName} • ${summary.formattedFileSize})"
                         backupFeedback = msg
+                        FocusNotificationManager.showManualBackupSuccessNotification(context, summary)
                         try {
+                            val toastText = buildString {
+                                appendLine("✅ تم النسخ الاحتياطي الشامل بنجاح!")
+                                appendLine("📁 المشاريع: ${summary.projectsCount} | 📝 المهام: ${summary.tasksCount} | ☑️ الفرعية: ${summary.subtasksCount}")
+                                append("🍅 الجلسات: ${summary.pomodoroSessionsCount} | ⚙️ الإعدادات: ${summary.totalPrefsCount} | 💾 ${summary.formattedFileSize}")
+                            }
                             Toast.makeText(
                                 context,
-                                "تم حفظ النسخة الاحتياطية بنجاح في مجلد Documents/Focus_Zohayr",
+                                toastText,
                                 Toast.LENGTH_LONG
                             ).show()
                         } catch (_: Exception) {
@@ -799,8 +809,98 @@ fun SettingsDialog(
         }
     }
 
+    // Detailed Live Export Summary Dialog on Manual Backup
+    exportSummaryDialogData?.let { summary ->
+        AlertDialog(
+            onDismissRequest = { exportSummaryDialogData = null },
+            shape = RoundedCornerShape(14.dp),
+            containerColor = DarkSurface,
+            modifier = Modifier
+                .border(1.dp, ForestEmerald.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                .testTag("manual_export_summary_dialog"),
+            title = {
+                Text(
+                    text = "✅ تم النسخ الاحتياطي الشامل بنجاح!",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ForestEmerald
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "📁 المشاريع: ${summary.projectsCount}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = DarkTextPrimary
+                    )
+                    Text(
+                        text = "📝 المهام الرئيسية: ${summary.tasksCount}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = DarkTextPrimary
+                    )
+                    Text(
+                        text = "☑️ المهام الفرعية: ${summary.subtasksCount}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = DarkTextPrimary
+                    )
+                    Text(
+                        text = "🍅 جلسات البومودورو والإحصائيات: ${summary.pomodoroSessionsCount}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = DarkTextPrimary
+                    )
+                    Text(
+                        text = "⚙️ الإعدادات والتفضيلات: ${summary.totalPrefsCount} إعداد",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = DarkTextPrimary
+                    )
+                    Text(
+                        text = "💾 حجم الملف: ${summary.formattedFileSize} (${summary.fileName})",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CoralPrimary
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { exportSummaryDialogData = null },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CoralPrimary,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("export_summary_ok_button")
+                ) {
+                    Text(
+                        text = "موافق",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+            }
+        )
+    }
+
     // Confirmation Dialog for Import / Restore Backup
     pendingImportState?.let { importedState ->
+        val subtasksTotal = if (importedState.subtasks.isNotEmpty()) {
+            importedState.subtasks.size
+        } else {
+            importedState.tasks.sumOf { it.subtasks.size }
+        }
+        val sessionsTotal = if (importedState.pomodoroSessions.isNotEmpty()) {
+            importedState.pomodoroSessions.size
+        } else {
+            importedState.focusRecords.size
+        }
         AlertDialog(
             onDismissRequest = { pendingImportState = null },
             shape = RoundedCornerShape(14.dp),
@@ -809,7 +909,7 @@ fun SettingsDialog(
             title = {
                 Text(
                     text = if (isArabic) {
-                        "استعادة من ملف نسخ احتياطي"
+                        "استعادة شاملة من ملف نسخ احتياطي"
                     } else {
                         "Restore from Backup File"
                     },
@@ -833,9 +933,9 @@ fun SettingsDialog(
 
                     Text(
                         text = if (isArabic) {
-                            "تحتوي النسخة على ${importedState.tasks.size} مهمة، و ${importedState.projects.size} مشروع، و ${importedState.focusRecords.size} سجل تركيز."
+                            "تحتوي النسخة على ${importedState.projects.size} مشاريع، ${importedState.tasks.size} مهام، $subtasksTotal مهام فرعية، $sessionsTotal جلسات تركيز، وكافة الإعدادات."
                         } else {
-                            "Contains ${importedState.tasks.size} tasks, ${importedState.projects.size} projects, and ${importedState.focusRecords.size} focus records."
+                            "Contains ${importedState.projects.size} projects, ${importedState.tasks.size} tasks, $subtasksTotal subtasks, and $sessionsTotal focus sessions."
                         },
                         fontSize = 12.sp,
                         color = DarkTextSecondary
@@ -848,9 +948,9 @@ fun SettingsDialog(
                             pendingImportState = null
                             backupIsError = false
                             val msg = if (isArabic) {
-                                "تم استعادة النسخة الاحتياطية وتحديث جميع المهام والإحصائيات بنجاح!"
+                                "تمت الاستعادة بنجاح: ${importedState.projects.size} مشاريع، ${importedState.tasks.size} مهام، $subtasksTotal مهام فرعية، $sessionsTotal جلسات تركيز، وكافة الإعدادات"
                             } else {
-                                "Backup restored and all tasks & statistics refreshed!"
+                                "Restored successfully: ${importedState.projects.size} projects, ${importedState.tasks.size} tasks, $subtasksTotal subtasks, $sessionsTotal focus sessions, and all settings"
                             }
                             backupFeedback = msg
                             try {
@@ -884,7 +984,7 @@ fun SettingsDialog(
                             pendingImportState = null
                             backupIsError = false
                             val msg = if (isArabic) {
-                                "تم دمج النسخة الاحتياطية مع المهام الحالية بنجاح!"
+                                "تمت الاستعادة بنجاح: ${importedState.projects.size} مشاريع، ${importedState.tasks.size} مهام، $subtasksTotal مهام فرعية، $sessionsTotal جلسات تركيز، وكافة الإعدادات"
                             } else {
                                 "Backup merged with current tasks successfully!"
                             }

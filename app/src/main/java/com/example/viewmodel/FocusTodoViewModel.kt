@@ -13,6 +13,7 @@ import com.example.model.AppLanguage
 import com.example.model.AppSettings
 import com.example.model.FocusRecord
 import com.example.model.FolderItem
+import com.example.model.ManualBackupExportSummary
 import com.example.model.PersistedTimerState
 import com.example.model.PlantSpecies
 import com.example.model.PlantedTree
@@ -402,9 +403,12 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun updateTask(taskId: String, transform: (TaskItem) -> TaskItem) {
         val previousTask = _uiState.value.data.tasks.find { it.id == taskId }
+        val now = System.currentTimeMillis()
         commitData { data ->
             data.copy(
-                tasks = data.tasks.map { if (it.id == taskId) transform(it) else it }
+                tasks = data.tasks.map {
+                    if (it.id == taskId) transform(it).copy(updatedAtEpochMillis = now) else it
+                }
             )
         }
         val updatedTask = _uiState.value.data.tasks.find { it.id == taskId } ?: return
@@ -436,7 +440,13 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         val clean = title.trim()
         if (clean.isEmpty()) return
         updateTask(taskId) { task ->
-            task.copy(subtasks = task.subtasks + SubtaskItem(title = clean))
+            task.copy(
+                subtasks = task.subtasks + SubtaskItem(
+                    title = clean,
+                    parentTaskId = taskId,
+                    sortOrder = task.subtasks.size
+                )
+            )
         }
     }
 
@@ -502,20 +512,24 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun saveProject(existingId: String?, name: String, colorHex: String, folderId: String?) {
         val clean = name.trim()
         if (clean.isEmpty()) return
+        val now = System.currentTimeMillis()
         commitData { data ->
             if (existingId == null) {
                 data.copy(
                     projects = data.projects + ProjectItem(
                         name = clean,
                         colorHex = colorHex,
-                        folderId = folderId
+                        folderId = folderId,
+                        sortOrder = data.projects.size,
+                        createdAt = now,
+                        updatedAt = now
                     )
                 )
             } else {
                 data.copy(
                     projects = data.projects.map {
                         if (it.id == existingId) {
-                            it.copy(name = clean, colorHex = colorHex, folderId = folderId)
+                            it.copy(name = clean, colorHex = colorHex, folderId = folderId, updatedAt = now)
                         } else it
                     }
                 )
@@ -1212,9 +1226,15 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun exportManualBackupToDocuments(onResult: (Result<String>) -> Unit) {
+        exportManualBackupWithSummary { res ->
+            onResult(res.map { it.fileName })
+        }
+    }
+
+    fun exportManualBackupWithSummary(onResult: (Result<ManualBackupExportSummary>) -> Unit) {
         viewModelScope.launch {
             val res = try {
-                repository.exportManualBackupToDocuments(_uiState.value.data)
+                repository.exportManualBackupWithSummary(_uiState.value.data)
             } catch (e: Exception) {
                 Result.failure(e)
             }
@@ -1243,15 +1263,16 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         FocusNotificationManager.cancelOngoingTimerNotification(appContext)
         FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
 
-        val targetState = when (mode) {
-            BackupImportMode.MERGE -> repository.mergeBackupStates(_uiState.value.data, parsed)
+        val currentData = _uiState.value.data
+        val previewTarget = when (mode) {
+            BackupImportMode.MERGE -> repository.mergeBackupStates(currentData, parsed)
             BackupImportMode.REPLACE -> parsed
         }
 
-        val secs = targetState.settings.pomodoroMinutes * 60
+        val secs = previewTarget.settings.pomodoroMinutes * 60
         _uiState.update {
             it.copy(
-                data = targetState,
+                data = previewTarget,
                 selectedTaskId = null,
                 timer = TimerUiState(
                     totalPhaseSeconds = secs,
@@ -1260,12 +1281,27 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         viewModelScope.launch {
-            repository.saveState(targetState)
+            val restored = repository.restoreFullStateAtomically(
+                current = currentData,
+                imported = parsed,
+                mode = mode
+            )
             val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
-            _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
+            val restoredSecs = restored.settings.pomodoroMinutes * 60
+            _uiState.update {
+                it.copy(
+                    data = restored,
+                    selectedTaskId = null,
+                    timer = TimerUiState(
+                        totalPhaseSeconds = restoredSecs,
+                        remainingSeconds = restoredSecs
+                    ),
+                    lastAutoBackupTimeMillis = updatedBackupTs
+                )
+            }
+            FocusNotificationManager.syncAllTaskReminders(appContext, restored.tasks, restored.settings)
+            syncWhiteNoise()
         }
-        FocusNotificationManager.syncAllTaskReminders(appContext, targetState.tasks, targetState.settings)
-        syncWhiteNoise()
     }
 
     fun resetDemoData() {

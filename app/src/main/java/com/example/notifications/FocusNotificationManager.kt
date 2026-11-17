@@ -19,6 +19,7 @@ import com.example.R
 import com.example.data.DateUtils
 import com.example.model.AppLanguage
 import com.example.model.AppSettings
+import com.example.model.ManualBackupExportSummary
 import com.example.model.TaskItem
 import com.example.model.TimerPhase
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -637,6 +638,40 @@ object FocusNotificationManager {
 
         try {
             nm.notify(9050 + step, builder.build())
+        } catch (_: SecurityException) {
+        }
+    }
+
+    fun showManualBackupSuccessNotification(
+        context: Context,
+        summary: ManualBackupExportSummary
+    ) {
+        if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
+        ensureChannelsCreated(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+
+        val title = "✅ تم النسخ الاحتياطي الشامل بنجاح!"
+        val bigText = buildString {
+            appendLine("📁 المشاريع: ${summary.projectsCount}")
+            appendLine("📝 المهام الرئيسية: ${summary.tasksCount}")
+            appendLine("☑️ المهام الفرعية: ${summary.subtasksCount}")
+            appendLine("🍅 جلسات البومودورو والإحصائيات: ${summary.pomodoroSessionsCount}")
+            appendLine("⚙️ الإعدادات والتفضيلات: ${summary.totalPrefsCount} إعداد")
+            append("💾 حجم الملف: ${summary.formattedFileSize} (${summary.fileName})")
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_POMODORO_COMPLETE_SILENT)
+            .setSmallIcon(R.drawable.ic_notification_timer)
+            .setColor(CORAL_ACCENT_COLOR)
+            .setContentTitle(title)
+            .setContentText("💾 ${summary.formattedFileSize} • 📝 ${summary.tasksCount} مهام • 📁 ${summary.projectsCount} مشاريع")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+
+        try {
+            nm.notify(9060, builder.build())
         } catch (_: SecurityException) {
         }
     }

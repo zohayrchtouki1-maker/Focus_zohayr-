@@ -159,23 +159,71 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `local backup generates focus_zohayr_backup filename and supports merge and replace`() {
+    fun `local backup generates focus_zohayr_backup filename and supports exhaustive v3 export and restore`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repo = FocusRepository(context)
         val fileName = FocusRepository.generateBackupFileName()
         assertTrue(fileName.matches(Regex("^focus_zohayr_backup_\\d{4}-\\d{2}-\\d{2}\\.json$")))
 
         val manualTimestampedName = FocusRepository.generateManualTimestampedBackupFileName()
-        assertTrue(manualTimestampedName.matches(Regex("^focus_zohayr_backup_\\d{8}_\\d{4}\\.json$")))
+        assertTrue(
+            manualTimestampedName.matches(
+                Regex("^focus_zohayr_backup_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}\\.json$")
+            )
+        )
 
         kotlinx.coroutines.runBlocking {
-            val currentState = SeedData.createInitialState().copy(
+            val initialSeed = SeedData.createInitialState()
+            val customProject = com.example.model.ProjectItem(
+                id = "custom_proj_99",
+                name = "مشروع التطوير الخاص",
+                colorHex = "#E05246",
+                sortOrder = 4,
+                isDefault = false
+            )
+            val subtask1 = com.example.model.SubtaskItem(
+                id = "sub_1",
+                parentTaskId = "existing_task_1",
+                title = "الخطوة الفرعية الأولى",
+                isDone = true,
+                sortOrder = 0
+            )
+            val subtask2 = com.example.model.SubtaskItem(
+                id = "sub_2",
+                parentTaskId = "existing_task_1",
+                title = "الخطوة الفرعية الثانية",
+                isDone = false,
+                sortOrder = 1
+            )
+            val sessionRecord = com.example.model.FocusRecord(
+                id = "session_1",
+                taskId = "existing_task_1",
+                taskTitle = "مهمة حالية",
+                projectId = customProject.id,
+                sessionType = "FOCUS",
+                startedAtEpochMillis = System.currentTimeMillis() - 1_500_000L,
+                endTimeEpochMillis = System.currentTimeMillis(),
+                durationMinutes = 25,
+                durationSeconds = 1500,
+                wasCompleted = true,
+                dateKey = "2026-11-17"
+            )
+            val currentState = initialSeed.copy(
+                projects = initialSeed.projects + customProject,
                 tasks = listOf(
                     TaskItem(
                         id = "existing_task_1",
                         title = "مهمة حالية",
-                        dueDateEpochDay = DateUtils.todayEpochDay()
+                        notes = "ملاحظة تفصيلية للمهمة",
+                        projectId = customProject.id,
+                        dueDateEpochDay = DateUtils.todayEpochDay(),
+                        subtasks = listOf(subtask1, subtask2)
                     )
+                ),
+                focusRecords = listOf(sessionRecord),
+                settings = initialSeed.settings.copy(
+                    pomodoroMinutes = 40,
+                    shortBreakMinutes = 10
                 )
             )
             val saveRes = repo.saveState(currentState)
@@ -185,10 +233,46 @@ class ExampleRobolectricTest {
             val loadedState = repo.loadState()
             assertEquals(1, loadedState.tasks.size)
             assertEquals("existing_task_1", loadedState.tasks.first().id)
+            assertEquals(2, loadedState.subtasks.size)
+            assertEquals(5, loadedState.projects.size)
+            assertEquals(1, loadedState.pomodoroSessions.size)
+            assertTrue(loadedState.allPreferences.isNotEmpty())
 
-            val manualExportRes = repo.exportManualBackupToDocuments(loadedState)
-            assertTrue(manualExportRes.isSuccess)
-            assertTrue(manualExportRes.getOrNull()!!.startsWith("focus_zohayr_backup_"))
+            val summaryRes = repo.exportManualBackupWithSummary(loadedState)
+            assertTrue(summaryRes.isSuccess)
+            val summary = summaryRes.getOrNull()!!
+            assertTrue(summary.fileName.startsWith("focus_zohayr_backup_"))
+            assertEquals(5, summary.projectsCount)
+            assertEquals(1, summary.tasksCount)
+            assertEquals(2, summary.subtasksCount)
+            assertEquals(1, summary.pomodoroSessionsCount)
+            assertTrue(summary.totalPrefsCount > 0)
+            assertTrue(summary.fileSizeBytes > 0L)
+
+            val exportedJson = repo.exportJson(loadedState)
+            assertTrue(exportedJson.contains("\"backupVersion\": 3"))
+            assertTrue(exportedJson.contains("\"subtasks\""))
+            assertTrue(exportedJson.contains("\"pomodoroSessions\""))
+            assertTrue(exportedJson.contains("\"allPreferences\""))
+
+            val parsedFromExport = repo.parseBackupJson(exportedJson)
+            assertNotNull(parsedFromExport)
+            assertEquals(3, parsedFromExport!!.backupVersion)
+            assertEquals(5, parsedFromExport.projects.size)
+            assertEquals(2, parsedFromExport.subtasks.size)
+            assertEquals(1, parsedFromExport.pomodoroSessions.size)
+            assertEquals(40, parsedFromExport.settings.pomodoroMinutes)
+
+            val restoredState = repo.restoreFullStateAtomically(
+                current = SeedData.createInitialState(),
+                imported = parsedFromExport,
+                mode = com.example.data.BackupImportMode.REPLACE
+            )
+            assertEquals(5, restoredState.projects.size)
+            assertEquals(1, restoredState.tasks.size)
+            assertEquals(2, restoredState.tasks.first().subtasks.size)
+            assertEquals(1, restoredState.focusRecords.size)
+            assertEquals(40, restoredState.settings.pomodoroMinutes)
 
             val importedState = SeedData.createInitialState().copy(
                 tasks = listOf(
