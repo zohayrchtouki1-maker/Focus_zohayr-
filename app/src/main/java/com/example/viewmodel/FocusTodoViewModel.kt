@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.TomatoAiService
 import com.example.ai.TomatoChatMessage
+import com.example.ai.TomatoGeminiModel
 import com.example.ai.TomatoToolExecutionResult
 import com.example.ai.TomatoToolExecutor
 import com.example.audio.SoundSynthesizer
@@ -92,6 +93,7 @@ data class MainUiState(
     val showStrictBlockerSetup: Boolean = false,
     val showTomatoAi: Boolean = false,
     val tomatoAiApiKey: String = "",
+    val tomatoAiSelectedModel: TomatoGeminiModel = TomatoGeminiModel.FLASH_2_5,
     val tomatoAiMessages: List<TomatoChatMessage> = emptyList(),
     val tomatoAiIsLoading: Boolean = false,
     val timer: TimerUiState = TimerUiState(),
@@ -130,6 +132,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
 
             val lastAutoBackup = repository.getLastAutoBackupTimeMillis()
             val savedGeminiKey = TomatoAiService.getSavedApiKey(appContext)
+            val savedGeminiModel = TomatoAiService.getSavedModel(appContext)
 
             _uiState.update {
                 it.copy(
@@ -140,7 +143,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     strictBlockerPermissions = blockerPerms,
                     permissionRequestTrigger = if (shouldPromptOnLaunch) it.permissionRequestTrigger + 1 else it.permissionRequestTrigger,
                     lastAutoBackupTimeMillis = lastAutoBackup,
-                    tomatoAiApiKey = savedGeminiKey
+                    tomatoAiApiKey = savedGeminiKey,
+                    tomatoAiSelectedModel = savedGeminiModel
                 )
             }
             syncStrictBlockerTimerState()
@@ -1441,7 +1445,14 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun setShowTomatoAi(show: Boolean) {
         if (show) {
             val currentKey = TomatoAiService.getSavedApiKey(appContext)
-            _uiState.update { it.copy(showTomatoAi = true, tomatoAiApiKey = currentKey) }
+            val currentModel = TomatoAiService.getSavedModel(appContext)
+            _uiState.update {
+                it.copy(
+                    showTomatoAi = true,
+                    tomatoAiApiKey = currentKey,
+                    tomatoAiSelectedModel = currentModel
+                )
+            }
         } else {
             _uiState.update { it.copy(showTomatoAi = false) }
         }
@@ -1452,6 +1463,12 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         TomatoAiService.saveApiKey(appContext, clean)
         _uiState.update { it.copy(tomatoAiApiKey = clean) }
         // Trigger a state save so the API key in SharedPreferences is also included in local backup
+        commitData { it }
+    }
+
+    fun selectTomatoAiModel(model: TomatoGeminiModel) {
+        TomatoAiService.saveSelectedModel(appContext, model)
+        _uiState.update { it.copy(tomatoAiSelectedModel = model) }
         commitData { it }
     }
 
@@ -1466,6 +1483,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         val apiKey = _uiState.value.tomatoAiApiKey.ifBlank {
             TomatoAiService.getSavedApiKey(appContext)
         }
+        val selectedModel = _uiState.value.tomatoAiSelectedModel
         val historyBefore = _uiState.value.tomatoAiMessages
         val userMsg = TomatoChatMessage(
             isUser = true,
@@ -1483,6 +1501,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 val result = TomatoAiService.sendMessageWithAutonomousTools(
                     apiKey = apiKey,
+                    selectedModelId = selectedModel.modelId,
                     conversationHistory = historyBefore,
                     userMessage = cleanText,
                     executor = this@FocusTodoViewModel

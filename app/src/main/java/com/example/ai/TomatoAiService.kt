@@ -87,8 +87,37 @@ interface TomatoToolExecutor {
     fun getCurrentStateSnapshot(): Pair<AppBackupState, TimerUiState>
 }
 
+enum class TomatoGeminiModel(
+    val modelId: String,
+    val shortBadge: String,
+    val displayLabel: String
+) {
+    FLASH_2_5(
+        modelId = "gemini-2.5-flash",
+        shortBadge = "2.5 Flash",
+        displayLabel = "2.5 Flash — متوازن وذكي"
+    ),
+    FLASH_LITE_2_5(
+        modelId = "gemini-2.5-flash-lite",
+        shortBadge = "2.5 Flash-Lite",
+        displayLabel = "2.5 Flash-Lite — سريع وخفيف"
+    ),
+    PRO_2_5(
+        modelId = "gemini-2.5-pro",
+        shortBadge = "2.5 Pro",
+        displayLabel = "2.5 Pro — تخطيط عميق"
+    );
+
+    companion object {
+        fun fromModelId(id: String?): TomatoGeminiModel {
+            return entries.find { it.modelId.equals(id?.trim(), ignoreCase = true) } ?: FLASH_2_5
+        }
+    }
+}
+
 object TomatoAiService {
     const val PREF_GEMINI_API_KEY = "tomato_ai_gemini_api_key"
+    const val PREF_GEMINI_MODEL = "tomato_ai_selected_model"
     const val MODEL_NAME = "gemini-2.5-flash"
 
     fun getSavedApiKey(context: Context): String {
@@ -99,6 +128,22 @@ object TomatoAiService {
     fun saveApiKey(context: Context, apiKey: String) {
         val prefs = context.getSharedPreferences(FocusRepository.PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putString(PREF_GEMINI_API_KEY, apiKey.trim()).commit()
+    }
+
+    fun getSavedModel(context: Context): TomatoGeminiModel {
+        val prefs = context.getSharedPreferences(FocusRepository.PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(PREF_GEMINI_MODEL, TomatoGeminiModel.FLASH_2_5.modelId)
+        return TomatoGeminiModel.fromModelId(raw)
+    }
+
+    fun saveSelectedModel(context: Context, model: TomatoGeminiModel) {
+        val prefs = context.getSharedPreferences(FocusRepository.PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(PREF_GEMINI_MODEL, model.modelId).commit()
+    }
+
+    fun buildEndpointUrl(modelId: String, apiKey: String): String {
+        val resolvedModel = TomatoGeminiModel.fromModelId(modelId).modelId
+        return "https://generativelanguage.googleapis.com/v1beta/models/$resolvedModel:generateContent?key=${apiKey.trim()}"
     }
 
     fun buildLiveAppContextPrompt(state: AppBackupState, timer: TimerUiState): String {
@@ -487,6 +532,7 @@ object TomatoAiService {
 
     suspend fun sendMessageWithAutonomousTools(
         apiKey: String,
+        selectedModelId: String = MODEL_NAME,
         conversationHistory: List<TomatoChatMessage>,
         userMessage: String,
         executor: TomatoToolExecutor
@@ -495,6 +541,7 @@ object TomatoAiService {
         if (cleanKey.isEmpty()) {
             return@withContext Result.failure(IllegalStateException("يرجى إدخال مفتاح Gemini API أولاً."))
         }
+        val activeModelId = TomatoGeminiModel.fromModelId(selectedModelId).modelId
 
         try {
             val contents = JSONArray()
@@ -544,7 +591,7 @@ object TomatoAiService {
                     )
                 }
 
-                val responseJson = executePostRequest(cleanKey, requestPayload)
+                val responseJson = executePostRequest(cleanKey, activeModelId, requestPayload)
                 val candidates = responseJson.optJSONArray("candidates")
                 if (candidates == null || candidates.length() == 0) {
                     break
@@ -772,8 +819,8 @@ object TomatoAiService {
         }
     }
 
-    private fun executePostRequest(apiKey: String, payload: JSONObject): JSONObject {
-        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent?key=$apiKey"
+    private fun executePostRequest(apiKey: String, modelId: String, payload: JSONObject): JSONObject {
+        val endpoint = buildEndpointUrl(modelId, apiKey)
         val url = URL(endpoint)
         val conn = (url.openConnection() as HttpsURLConnection).apply {
             requestMethod = "POST"

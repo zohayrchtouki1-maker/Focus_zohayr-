@@ -223,8 +223,24 @@ class ExampleRobolectricTest {
                     shortBreakMinutes = 10
                 )
             )
+            val publicDocs = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS)
+            val backupDir = java.io.File(publicDocs, FocusRepository.BACKUP_FOLDER_NAME)
+            backupDir.mkdirs()
+            val masterFile = java.io.File(backupDir, "focus_zohayr_backup.json")
+            masterFile.writeText("{\"old\":true}")
+            java.io.File(backupDir, "focus_zohayr_backup (1).json").writeText("{}")
+            java.io.File(backupDir, "focus_zohayr_backup (2).json").writeText("{}")
+
             val saveRes = repo.saveState(currentState)
             assertTrue(saveRes.isSuccess)
+            // Trigger second auto-backup to verify in-place overwrite with zero duplicates
+            val secondSaveRes = repo.saveState(currentState)
+            assertTrue(secondSaveRes.isSuccess)
+
+            val filesInBackupDir = backupDir.listFiles()?.map { it.name }.orEmpty()
+            assertEquals(listOf("focus_zohayr_backup.json"), filesInBackupDir)
+            assertTrue(masterFile.readText().contains("existing_task_1"))
+
             assertTrue(repo.getLastAutoBackupTimeMillis() > 0L)
             assertNotNull(nm.getNotificationChannel(FocusNotificationManager.CHANNEL_AUTO_BACKUP))
             val autoBackupNotif = org.robolectric.Shadows.shadowOf(nm)
@@ -388,10 +404,36 @@ class ExampleRobolectricTest {
         val vm = com.example.viewmodel.FocusTodoViewModel(app)
         vm.resetDemoData()
 
-        // 1. Test API Key saving
+        // 1. Test API Key saving & Gemini Model Selector persistence + dynamic URL routing
         vm.saveTomatoAiApiKey("AIzaSyTestKey12345")
         assertEquals("AIzaSyTestKey12345", com.example.ai.TomatoAiService.getSavedApiKey(app))
         assertEquals("AIzaSyTestKey12345", vm.uiState.value.tomatoAiApiKey)
+
+        // Default model is gemini-2.5-flash
+        assertEquals(com.example.ai.TomatoGeminiModel.FLASH_2_5, vm.uiState.value.tomatoAiSelectedModel)
+        assertEquals("2.5 Flash — متوازن وذكي", com.example.ai.TomatoGeminiModel.FLASH_2_5.displayLabel)
+        assertEquals("2.5 Flash-Lite — سريع وخفيف", com.example.ai.TomatoGeminiModel.FLASH_LITE_2_5.displayLabel)
+        assertEquals("2.5 Pro — تخطيط عميق", com.example.ai.TomatoGeminiModel.PRO_2_5.displayLabel)
+
+        vm.selectTomatoAiModel(com.example.ai.TomatoGeminiModel.FLASH_LITE_2_5)
+        assertEquals(com.example.ai.TomatoGeminiModel.FLASH_LITE_2_5, com.example.ai.TomatoAiService.getSavedModel(app))
+        assertEquals(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=AIzaSyTestKey12345",
+            com.example.ai.TomatoAiService.buildEndpointUrl(vm.uiState.value.tomatoAiSelectedModel.modelId, "AIzaSyTestKey12345")
+        )
+
+        vm.selectTomatoAiModel(com.example.ai.TomatoGeminiModel.PRO_2_5)
+        assertEquals(com.example.ai.TomatoGeminiModel.PRO_2_5, com.example.ai.TomatoAiService.getSavedModel(app))
+        assertEquals(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=AIzaSyTestKey12345",
+            com.example.ai.TomatoAiService.buildEndpointUrl(vm.uiState.value.tomatoAiSelectedModel.modelId, "AIzaSyTestKey12345")
+        )
+
+        vm.selectTomatoAiModel(com.example.ai.TomatoGeminiModel.FLASH_2_5)
+        assertEquals(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=AIzaSyTestKey12345",
+            com.example.ai.TomatoAiService.buildEndpointUrl(vm.uiState.value.tomatoAiSelectedModel.modelId, "AIzaSyTestKey12345")
+        )
 
         // 2. Test Live Context Prompt contains folders, projects, tags, and timer settings
         val (snapshotData, snapshotTimer) = vm.getCurrentStateSnapshot()

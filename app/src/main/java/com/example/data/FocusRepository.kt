@@ -47,6 +47,7 @@ class FocusRepository(private val context: Context) {
         const val MASTER_BACKUP_FILE_NAME = "focus_zohayr_backup.json"
         const val AUTO_BACKUP_FILE_NAME = MASTER_BACKUP_FILE_NAME
         private const val LEGACY_AUTO_BACKUP_FILE_NAME = "focus_zohayr_auto_backup.json"
+        private const val PREFS_MASTER_BACKUP_URI = "master_backup_mediastore_uri"
 
         private val backupMutex = Mutex()
         @Volatile
@@ -492,49 +493,138 @@ class FocusRepository(private val context: Context) {
         val resolver = context.contentResolver
         val relativePath = "${Environment.DIRECTORY_DOCUMENTS}/$BACKUP_FOLDER_NAME/"
 
+        // 1. Clean up any numbered duplicate files like "focus_zohayr_backup (1).json" on filesystem
+        cleanupFilesystemDuplicateBackupFiles(fileName)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val collectionUri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
 
             if (overwriteExisting) {
+                var targetExistingUri: Uri? = null
+
+                // Check all MediaStore entries matching focus_zohayr_backup* inside Documents/Focus_Zohayr/
                 try {
-                    val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
-                    val selectionArgs = arrayOf(fileName, "${Environment.DIRECTORY_DOCUMENTS}/$BACKUP_FOLDER_NAME%")
+                    val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ? OR ${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
+                    val selectionArgs = arrayOf("focus_zohayr_backup%", LEGACY_AUTO_BACKUP_FILE_NAME)
                     resolver.query(
                         collectionUri,
-                        arrayOf(MediaStore.MediaColumns._ID),
+                        arrayOf(
+                            MediaStore.MediaColumns._ID,
+                            MediaStore.MediaColumns.DISPLAY_NAME,
+                            MediaStore.MediaColumns.RELATIVE_PATH
+                        ),
                         selection,
                         selectionArgs,
                         "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
                     )?.use { cursor ->
-                        if (cursor.moveToFirst()) {
+                        while (cursor.moveToNext()) {
                             val id = cursor.getLong(0)
-                            val existingUri = ContentUris.withAppendedId(collectionUri, id)
-                            // Remove any extra duplicate MediaStore rows for the same filename
-                            while (cursor.moveToNext()) {
-                                val dupId = cursor.getLong(0)
-                                val dupUri = ContentUris.withAppendedId(collectionUri, dupId)
+                            val displayName = cursor.getString(1).orEmpty()
+                            val rowRelPath = cursor.getString(2).orEmpty()
+                            if (rowRelPath.isNotBlank() && !rowRelPath.contains(BACKUP_FOLDER_NAME, ignoreCase = true)) {
+                                continue
+                            }
+                            val rowUri = ContentUris.withAppendedId(collectionUri, id)
+
+                            if (displayName == fileName) {
+                                if (targetExistingUri == null) {
+                                    targetExistingUri = rowUri
+                                } else {
+                                    // Extra duplicate row with the exact same name -> delete
+                                    try {
+                                        resolver.delete(rowUri, null, null)
+                                    } catch (_: Exception) {
+                                    }
+                                }
+                            } else {
+                                // Numbered duplicate like "focus_zohayr_backup (1).json" -> delete
                                 try {
-                                    resolver.delete(dupUri, null, null)
+                                    resolver.delete(rowUri, null, null)
                                 } catch (_: Exception) {
                                 }
                             }
-                            val wroteExisting = try {
-                                (resolver.openOutputStream(existingUri, "wt")
-                                    ?: resolver.openOutputStream(existingUri, "rwt")
-                                    ?: resolver.openOutputStream(existingUri))?.use { out ->
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+
+                // Fallback to persisted URI if query didn't return it directly
+                if (targetExistingUri == null) {
+                    val savedUriStr = prefs.getString(PREFS_MASTER_BACKUP_URI, null)
+                    if (!savedUriStr.isNullOrBlank()) {
+                        try {
+                            val candidateUri = Uri.parse(savedUriStr)
+                            var isRenamedDuplicate = false
+                            resolver.query(
+                                candidateUri,
+                                arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME),
+                                null,
+                                null,
+                                null
+                            )?.use { c ->
+                                if (c.moveToFirst()) {
+                                    val name = c.getString(1).orEmpty()
+                                    if (name.isNotBlank() && name != fileName) {
+                                        isRenamedDuplicate = true
+                                    }
+                                }
+                            }
+                            if (isRenamedDuplicate) {
+                                resolver.delete(candidateUri, null, null)
+                            } else {
+                                targetExistingUri = candidateUri
+                            }
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+
+                // If an existing MediaStore entry for focus_zohayr_backup.json exists, overwrite it in-place ("wt")
+                if (targetExistingUri != null) {
+                    val wroteInPlace = try {
+                        (resolver.openOutputStream(targetExistingUri!!, "wt")
+                            ?: resolver.openOutputStream(targetExistingUri!!, "rwt")
+                            ?: resolver.openOutputStream(targetExistingUri!!, "w"))?.use { out ->
+                            out.write(bytes)
+                            out.flush()
+                            true
+                        } ?: false
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (wroteInPlace) {
+                        prefs.edit().putString(PREFS_MASTER_BACKUP_URI, targetExistingUri.toString()).commit()
+                        return targetExistingUri!!
+                    } else {
+                        try {
+                            resolver.delete(targetExistingUri!!, null, null)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+
+                // If the file already exists on disk in Documents/Focus_Zohayr/focus_zohayr_backup.json
+                // (e.g., from a previous install or direct File write), overwrite it directly in-place
+                // so MediaStore.insert() never sees a pre-existing file and never appends " (1)".
+                try {
+                    val publicDocs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+                    if (publicDocs != null) {
+                        val existingDiskFile = File(File(publicDocs, BACKUP_FOLDER_NAME), fileName)
+                        if (existingDiskFile.exists()) {
+                            val overwroteDiskFile = try {
+                                java.io.FileOutputStream(existingDiskFile, false).use { out ->
                                     out.write(bytes)
                                     out.flush()
                                     true
-                                } ?: false
+                                }
                             } catch (_: Exception) {
                                 false
                             }
-                            if (wroteExisting) {
-                                alsoWriteMirrorDocumentsFile(fileName, bytes)
-                                return existingUri
+                            if (overwroteDiskFile) {
+                                return Uri.fromFile(existingDiskFile)
                             } else {
                                 try {
-                                    resolver.delete(existingUri, null, null)
+                                    existingDiskFile.delete()
                                 } catch (_: Exception) {
                                 }
                             }
@@ -544,11 +634,11 @@ class FocusRepository(private val context: Context) {
                 }
             }
 
+            // Insert a single clean MediaStore entry (without IS_PENDING so MediaProvider never renames on un-pend)
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                 put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
                 put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
 
             val insertedUri = try {
@@ -558,40 +648,54 @@ class FocusRepository(private val context: Context) {
             }
 
             if (insertedUri != null) {
-                var streamWritten = false
-                try {
-                    resolver.openOutputStream(insertedUri)?.use { out ->
+                val streamWritten = try {
+                    (resolver.openOutputStream(insertedUri, "wt")
+                        ?: resolver.openOutputStream(insertedUri, "rwt")
+                        ?: resolver.openOutputStream(insertedUri))?.use { out ->
                         out.write(bytes)
                         out.flush()
-                        streamWritten = true
-                    }
+                        true
+                    } ?: false
                 } catch (_: Exception) {
-                    streamWritten = false
+                    false
                 }
 
-                try {
-                    val completeValues = ContentValues().apply {
-                        put(MediaStore.MediaColumns.IS_PENDING, 0)
-                    }
-                    resolver.update(insertedUri, completeValues, null, null)
-                } catch (_: Exception) {
-                }
-
-                alsoWriteMirrorDocumentsFile(fileName, bytes)
                 if (streamWritten) {
+                    prefs.edit().putString(PREFS_MASTER_BACKUP_URI, insertedUri.toString()).commit()
                     return insertedUri
+                } else {
+                    try {
+                        resolver.delete(insertedUri, null, null)
+                    } catch (_: Exception) {
+                    }
                 }
             }
         }
 
-        // Direct Documents/Focus_Zohayr fallback (API < 29 or local test environment)
+        // Direct Documents/Focus_Zohayr fallback (API < 29 or local JVM test environment)
         val fallbackFile = writeMirrorDocumentsFileOrThrow(fileName, bytes)
         return Uri.fromFile(fallbackFile)
     }
 
-    private fun alsoWriteMirrorDocumentsFile(fileName: String, bytes: ByteArray) {
+    private fun cleanupFilesystemDuplicateBackupFiles(canonicalFileName: String) {
         try {
-            writeMirrorDocumentsFileOrThrow(fileName, bytes)
+            val publicDocs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+            if (publicDocs != null) {
+                val dir = File(publicDocs, BACKUP_FOLDER_NAME)
+                if (dir.exists() && dir.isDirectory) {
+                    dir.listFiles()?.forEach { file ->
+                        if (file.isFile &&
+                            file.name != canonicalFileName &&
+                            (file.name.startsWith("focus_zohayr_backup") || file.name == LEGACY_AUTO_BACKUP_FILE_NAME)
+                        ) {
+                            try {
+                                file.delete()
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }
+                }
+            }
         } catch (_: Exception) {
         }
     }
@@ -613,24 +717,34 @@ class FocusRepository(private val context: Context) {
             val internalFallbackDir = File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
             internalFallbackDir.mkdirs()
             val internalFile = File(internalFallbackDir, fileName)
-            internalFile.writeBytes(bytes)
+            java.io.FileOutputStream(internalFile, false).use { out ->
+                out.write(bytes)
+                out.flush()
+            }
             return internalFile
         }
 
         return try {
             val outFile = File(targetDir, fileName)
-            outFile.writeBytes(bytes)
+            java.io.FileOutputStream(outFile, false).use { out ->
+                out.write(bytes)
+                out.flush()
+            }
             outFile
         } catch (_: Exception) {
             val internalFallbackDir = File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
             internalFallbackDir.mkdirs()
             val internalFile = File(internalFallbackDir, fileName)
-            internalFile.writeBytes(bytes)
+            java.io.FileOutputStream(internalFile, false).use { out ->
+                out.write(bytes)
+                out.flush()
+            }
             internalFile
         }
     }
 
     private fun removeLegacyAutoBackupFileIfPresent() {
+        cleanupFilesystemDuplicateBackupFiles(MASTER_BACKUP_FILE_NAME)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val resolver = context.contentResolver
@@ -652,16 +766,6 @@ class FocusRepository(private val context: Context) {
                         } catch (_: Exception) {
                         }
                     }
-                }
-            }
-        } catch (_: Exception) {
-        }
-        try {
-            val publicDocs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-            if (publicDocs != null) {
-                val legacyPublicFile = File(File(publicDocs, BACKUP_FOLDER_NAME), LEGACY_AUTO_BACKUP_FILE_NAME)
-                if (legacyPublicFile.exists()) {
-                    legacyPublicFile.delete()
                 }
             }
         } catch (_: Exception) {

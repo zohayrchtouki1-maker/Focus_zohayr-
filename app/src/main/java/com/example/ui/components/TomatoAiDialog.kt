@@ -34,6 +34,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -43,6 +44,8 @@ import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,6 +81,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ai.TomatoChatMessage
+import com.example.ai.TomatoGeminiModel
 import com.example.model.AppLanguage
 import com.example.ui.theme.CoralPrimary
 import com.example.ui.theme.DarkBackground
@@ -232,10 +236,12 @@ fun SmilingTomatoMascotIcon(
 @Composable
 fun TomatoAiDialog(
     apiKey: String,
+    selectedModel: TomatoGeminiModel = TomatoGeminiModel.FLASH_2_5,
     messages: List<TomatoChatMessage>,
     isLoading: Boolean,
     language: AppLanguage,
     onSaveApiKey: (String) -> Unit,
+    onSelectModel: (TomatoGeminiModel) -> Unit = {},
     onSendMessage: (String) -> Unit,
     onClearChat: () -> Unit,
     onDismiss: () -> Unit
@@ -247,6 +253,7 @@ fun TomatoAiDialog(
     var draftKey by remember(apiKey) { mutableStateOf(apiKey) }
     var showKeyPlaintext by remember { mutableStateOf(false) }
     var inputMessage by remember { mutableStateOf("") }
+    var modelDropdownExpanded by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
 
@@ -270,7 +277,7 @@ fun TomatoAiDialog(
                 .navigationBarsPadding()
                 .imePadding()
         ) {
-            // Top Header with Smiling Red Tomato Mascot + "Tomato AI" Title + API Key Icon + Close Icon
+            // Top Header with Smiling Red Tomato Mascot + "Tomato AI" Title + Model Selector Pill + API Key Icon + Close Icon
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -296,18 +303,75 @@ fun TomatoAiDialog(
                                 fontWeight = FontWeight.Bold,
                                 color = DarkTextPrimary
                             )
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(CoralPrimary.copy(alpha = 0.16f))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = "2.5 Flash",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = CoralPrimary
-                                )
+                            Box {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(CoralPrimary.copy(alpha = 0.16f))
+                                        .border(1.dp, CoralPrimary.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                                        .clickable { modelDropdownExpanded = true }
+                                        .padding(start = 8.dp, end = 4.dp, top = 3.dp, bottom = 3.dp)
+                                        .testTag("tomato_ai_model_selector_pill")
+                                ) {
+                                    Text(
+                                        text = selectedModel.shortBadge,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = CoralPrimary
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = CoralPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+
+                                DropdownMenu(
+                                    expanded = modelDropdownExpanded,
+                                    onDismissRequest = { modelDropdownExpanded = false },
+                                    modifier = Modifier
+                                        .background(DarkSurface)
+                                        .border(1.dp, DarkOutline, RoundedCornerShape(8.dp))
+                                ) {
+                                    TomatoGeminiModel.entries.forEach { modelOption ->
+                                        val isSelected = modelOption == selectedModel
+                                        DropdownMenuItem(
+                                            text = {
+                                                Column {
+                                                    Text(
+                                                        text = modelOption.displayLabel,
+                                                        fontSize = 13.sp,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (isSelected) CoralPrimary else DarkTextPrimary
+                                                    )
+                                                    Text(
+                                                        text = modelOption.modelId,
+                                                        fontSize = 11.sp,
+                                                        color = DarkTextSecondary
+                                                    )
+                                                }
+                                            },
+                                            trailingIcon = {
+                                                if (isSelected) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Check,
+                                                        contentDescription = null,
+                                                        tint = CoralPrimary,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                onSelectModel(modelOption)
+                                                modelDropdownExpanded = false
+                                            },
+                                            modifier = Modifier.testTag("tomato_model_option_${modelOption.modelId}")
+                                        )
+                                    }
+                                }
                             }
                         }
                         Text(
@@ -377,7 +441,7 @@ fun TomatoAiDialog(
 
             HorizontalDivider(color = DarkOutline)
 
-            // API Key Setup / Update View
+            // API Key & Model Setup / Update View
             AnimatedVisibility(
                 visible = showKeyEditor || apiKey.isBlank(),
                 enter = fadeIn(),
@@ -408,7 +472,7 @@ fun TomatoAiDialog(
                                 modifier = Modifier.size(20.dp)
                             )
                             Text(
-                                text = if (isArabic) "إعداد مفتاح Gemini API الشخصي" else "Personal Gemini API Key Setup",
+                                text = if (isArabic) "إعداد مفتاح Gemini API والنموذج" else "Personal Gemini API Key & Model Setup",
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = DarkTextPrimary
@@ -417,14 +481,68 @@ fun TomatoAiDialog(
 
                         Text(
                             text = if (isArabic) {
-                                "أدخل مفتاح Gemini API الخاص بك لتفعيل مساعد Tomato AI (نموذج gemini-2.5-flash). يتم حفظ المفتاح محلياً على جهازك فقط."
+                                "أدخل مفتاح Gemini API الخاص بك لتفعيل مساعد Tomato AI (${selectedModel.modelId}). يتم حفظ المفتاح والنموذج محلياً على جهازك فقط."
                             } else {
-                                "Paste your personal Gemini API Key to enable Tomato AI (gemini-2.5-flash). Stored locally on your device."
+                                "Paste your personal Gemini API Key to enable Tomato AI (${selectedModel.modelId}). Stored locally on your device."
                             },
                             fontSize = 13.sp,
                             color = DarkTextSecondary,
                             lineHeight = 19.sp
                         )
+
+                        // Model Selector Options inside Settings / Key Card
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = if (isArabic) "اختر نموذج Gemini:" else "Select Gemini Model:",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = DarkTextSecondary
+                            )
+                            TomatoGeminiModel.entries.forEach { modelOption ->
+                                val isSelected = modelOption == selectedModel
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (isSelected) CoralPrimary.copy(alpha = 0.14f) else DarkBackground
+                                        )
+                                        .border(
+                                            width = 1.dp,
+                                            color = if (isSelected) CoralPrimary else DarkOutline,
+                                            shape = RoundedCornerShape(10.dp)
+                                        )
+                                        .clickable { onSelectModel(modelOption) }
+                                        .padding(horizontal = 12.dp, vertical = 9.dp)
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = modelOption.displayLabel,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) CoralPrimary else DarkTextPrimary
+                                        )
+                                        Text(
+                                            text = modelOption.modelId,
+                                            fontSize = 11.sp,
+                                            color = DarkTextSecondary
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = CoralPrimary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
                         OutlinedTextField(
                             value = draftKey,

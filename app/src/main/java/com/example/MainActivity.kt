@@ -493,10 +493,12 @@ fun FocusTodoAppRoot(
                 ) {
                     TomatoAiDialog(
                         apiKey = uiState.tomatoAiApiKey,
+                        selectedModel = uiState.tomatoAiSelectedModel,
                         messages = uiState.tomatoAiMessages,
                         isLoading = uiState.tomatoAiIsLoading,
                         language = settings.language,
                         onSaveApiKey = { viewModel.saveTomatoAiApiKey(it) },
+                        onSelectModel = { viewModel.selectTomatoAiModel(it) },
                         onSendMessage = { viewModel.sendTomatoAiMessage(it) },
                         onClearChat = { viewModel.clearTomatoAiChat() },
                         onDismiss = { viewModel.setShowTomatoAi(false) }
