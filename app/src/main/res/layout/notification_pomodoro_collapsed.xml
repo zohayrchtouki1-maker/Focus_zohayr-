@@ -3,119 +3,37 @@
     android:id="@+id/notif_root_container"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@drawable/bg_notif_surface_dark"
-    android:gravity="center_vertical"
+    android:background="@android:color/transparent"
     android:layoutDirection="rtl"
-    android:orientation="horizontal"
-    android:paddingStart="12dp"
-    android:paddingTop="8dp"
-    android:paddingEnd="12dp"
-    android:paddingBottom="8dp">
+    android:orientation="vertical"
+    android:paddingTop="2dp"
+    android:paddingBottom="2dp">
 
-    <!-- Leading Coral Red Badge on the Right in RTL -->
-    <FrameLayout
-        android:id="@+id/notif_leading_badge"
-        android:layout_width="38dp"
-        android:layout_height="38dp"
-        android:background="@drawable/bg_notif_badge_coral">
-
-        <ImageView
-            android:id="@+id/notif_badge_icon"
-            android:layout_width="20dp"
-            android:layout_height="20dp"
-            android:layout_gravity="center"
-            android:contentDescription="@null"
-            android:src="@drawable/ic_notification_timer"
-            android:tint="#FFFFFF" />
-    </FrameLayout>
-
-    <!-- Center: Large Bold Countdown Timer + Secondary Compact Subtext -->
-    <LinearLayout
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="10dp"
-        android:layout_marginEnd="8dp"
-        android:layout_weight="1"
-        android:orientation="vertical">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:id="@+id/notif_remaining_time"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:fontFamily="monospace"
-                android:includeFontPadding="false"
-                android:text="25:00"
-                android:textColor="#F2F2F5"
-                android:textDirection="ltr"
-                android:textSize="24sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/notif_phase_badge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:text="جلسة تركيز"
-                android:textColor="#E05246"
-                android:textSize="12sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/notif_secondary_details"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:ellipsize="end"
-            android:includeFontPadding="false"
-            android:maxLines="1"
-            android:text="جلسة تركيز • مضى: 00:00 • 🍅 0"
-            android:textColor="#A0A0AB"
-            android:textSize="12sp" />
-    </LinearLayout>
-
-    <!-- Opposite End: Quick Action Pill Control Buttons -->
-    <LinearLayout
+    <TextView
+        android:id="@+id/notif_remaining_time"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
+        android:ellipsize="none"
+        android:fontFamily="sans-serif"
+        android:fontFeatureSettings="tnum"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:singleLine="true"
+        android:text="25:00"
+        android:textColor="#E05246"
+        android:textDirection="ltr"
+        android:textSize="28sp"
+        android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/notif_btn_pause_resume"
-            android:layout_width="wrap_content"
-            android:layout_height="32dp"
-            android:background="@drawable/bg_notif_btn_coral"
-            android:gravity="center"
-            android:minWidth="68dp"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:text="إيقاف مؤقت"
-            android:textColor="#FFFFFF"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/notif_btn_stop"
-            android:layout_width="wrap_content"
-            android:layout_height="32dp"
-            android:layout_marginStart="6dp"
-            android:background="@drawable/bg_notif_btn_secondary"
-            android:gravity="center"
-            android:minWidth="52dp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:text="إنهاء"
-            android:textColor="#F2F2F5"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-    </LinearLayout>
+    <TextView
+        android:id="@+id/notif_secondary_details"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:ellipsize="end"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="مضى 00:00 • جلسة تركيز"
+        android:textColor="@color/notif_subtext_adaptive"
+        android:textSize="12sp" />
 </LinearLayout>

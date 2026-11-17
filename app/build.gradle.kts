@@ -13,8 +13,8 @@ android {
     applicationId = "com.aistudio.focustodo.arpmzq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 18
-    versionName = "18.0"
+    versionCode = (System.getenv("BUILD_NUMBER")?.toIntOrNull() ?: 21)
+    versionName = "1.0.${System.getenv("BUILD_NUMBER") ?: "21"}"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
