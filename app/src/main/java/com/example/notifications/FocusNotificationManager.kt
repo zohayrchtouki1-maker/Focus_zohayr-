@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.view.View
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
@@ -68,11 +67,20 @@ object FocusNotificationManager {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
 
-        // 1. Silent Ongoing Channel (IMPORTANCE_LOW with null sound and no vibration)
+        // Ensure existing channel is upgraded to IMPORTANCE_DEFAULT if previously created with IMPORTANCE_LOW
+        try {
+            val existingOngoing = nm.getNotificationChannel(CHANNEL_POMODORO_ONGOING)
+            if (existingOngoing != null && existingOngoing.importance != NotificationManager.IMPORTANCE_DEFAULT) {
+                nm.deleteNotificationChannel(CHANNEL_POMODORO_ONGOING)
+            }
+        } catch (_: Exception) {
+        }
+
+        // 1. Top-of-Shade Silent Ongoing Channel (IMPORTANCE_DEFAULT with null sound and zero vibration)
         val ongoingChannel = NotificationChannel(
             CHANNEL_POMODORO_ONGOING,
             "Pomodoro Ongoing Timer / المؤقت المستمر",
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_DEFAULT
         ).apply {
             description = "Persistent silent countdown display while Pomodoro timer runs"
             setSound(null, null)
@@ -178,10 +186,8 @@ object FocusNotificationManager {
             safeElapsed / 60,
             safeElapsed % 60
         )
-        val elapsedSegment = if (isArabic) "مضى: $formattedElapsed" else "Elapsed: $formattedElapsed"
-        val pomodoroSegment = "🍅 ${todayCompletedPomodoros.coerceAtLeast(0)}"
-        val secondaryDetailsText = "$resolvedTaskTitle • $elapsedSegment • $pomodoroSegment"
-        val expandedDetailsText = "$elapsedSegment • $pomodoroSegment"
+        val elapsedSegment = if (isArabic) "مضى $formattedElapsed" else "Elapsed $formattedElapsed"
+        val secondaryDetailsText = "$elapsedSegment • $resolvedTaskTitle"
 
         val openAppIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -228,45 +234,36 @@ object FocusNotificationManager {
 
         val collapsedView = RemoteViews(context.packageName, R.layout.notification_pomodoro_collapsed).apply {
             setTextViewText(R.id.notif_remaining_time, formattedTime)
-            setTextViewText(R.id.notif_phase_badge, phaseLabel)
             setTextViewText(R.id.notif_secondary_details, secondaryDetailsText)
-            setTextViewText(R.id.notif_btn_pause_resume, pauseResumeLabel)
-            setTextViewText(R.id.notif_btn_stop, stopLabel)
-            setViewVisibility(R.id.notif_btn_pause_resume, if (canPauseOrResume) View.VISIBLE else View.GONE)
-            setOnClickPendingIntent(R.id.notif_btn_pause_resume, pauseOrResumePending)
-            setOnClickPendingIntent(R.id.notif_btn_stop, stopPending)
         }
 
         val expandedView = RemoteViews(context.packageName, R.layout.notification_pomodoro_expanded).apply {
             setTextViewText(R.id.notif_remaining_time, formattedTime)
-            setTextViewText(R.id.notif_phase_badge, phaseLabel)
-            setTextViewText(R.id.notif_task_title, resolvedTaskTitle)
-            setTextViewText(R.id.notif_secondary_details, expandedDetailsText)
-            setTextViewText(R.id.notif_btn_pause_resume, pauseResumeLabel)
-            setTextViewText(R.id.notif_btn_stop, stopLabel)
-            setViewVisibility(R.id.notif_btn_pause_resume, if (canPauseOrResume) View.VISIBLE else View.GONE)
-            setOnClickPendingIntent(R.id.notif_btn_pause_resume, pauseOrResumePending)
-            setOnClickPendingIntent(R.id.notif_btn_stop, stopPending)
+            setTextViewText(R.id.notif_secondary_details, secondaryDetailsText)
         }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_POMODORO_ONGOING)
             .setSmallIcon(R.drawable.ic_notification_timer)
             .setColor(CORAL_ACCENT_COLOR)
-            .setColorized(true)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setCustomContentView(collapsedView)
             .setCustomBigContentView(expandedView)
-            .setContentTitle("$phaseLabel • $formattedTime")
+            .setContentTitle(formattedTime)
             .setContentText(secondaryDetailsText)
-            .setSubText(pomodoroSegment)
+            .setSubText(phaseLabel)
             .setOngoing(true)
             .setAutoCancel(false)
             .setOnlyAlertOnce(true)
             .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(contentPendingIntent)
+
+        if (canPauseOrResume) {
+            builder.addAction(0, pauseResumeLabel, pauseOrResumePending)
+        }
+        builder.addAction(0, stopLabel, stopPending)
 
         try {
             nm.notify(NOTIFICATION_ID_ONGOING_TIMER, builder.build())

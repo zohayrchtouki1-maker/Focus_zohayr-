@@ -83,7 +83,7 @@ class ExampleRobolectricTest {
 
         val ongoingChannel = nm.getNotificationChannel(FocusNotificationManager.CHANNEL_POMODORO_ONGOING)
         assertNotNull(ongoingChannel)
-        assertEquals(NotificationManager.IMPORTANCE_LOW, ongoingChannel.importance)
+        assertEquals(NotificationManager.IMPORTANCE_DEFAULT, ongoingChannel.importance)
         assertNotNull(nm.getNotificationChannel(FocusNotificationManager.CHANNEL_POMODORO_COMPLETE))
         assertNotNull(nm.getNotificationChannel(FocusNotificationManager.CHANNEL_TASK_ALARMS))
 
@@ -94,10 +94,10 @@ class ExampleRobolectricTest {
             context = context,
             taskTitle = "جلسة تركيز",
             phase = TimerPhase.FOCUS,
-            formattedTime = "24:51",
+            formattedTime = "24:37",
             strictMode = false,
             settings = SeedData.createInitialState().settings,
-            elapsedSeconds = 9,
+            elapsedSeconds = 23,
             todayCompletedPomodoros = 2,
             isRunning = true
         )
@@ -108,6 +108,9 @@ class ExampleRobolectricTest {
         assertEquals(FocusNotificationManager.CORAL_ACCENT_COLOR, posted.color)
         assertTrue((posted.flags and android.app.Notification.FLAG_ONGOING_EVENT) != 0)
         assertTrue((posted.flags and android.app.Notification.FLAG_ONLY_ALERT_ONCE) != 0)
+        assertEquals(2, posted.actions.size)
+        assertEquals("إيقاف مؤقت", posted.actions[0].title.toString())
+        assertEquals("إنهاء", posted.actions[1].title.toString())
         @Suppress("DEPRECATION")
         assertNotNull(posted.contentView)
         @Suppress("DEPRECATION")
