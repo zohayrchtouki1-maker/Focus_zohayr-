@@ -864,6 +864,14 @@ fun SettingsDialog(
                         fontWeight = FontWeight.Bold,
                         color = CoralPrimary
                     )
+                    if (summary.updatedTimestamp.isNotBlank()) {
+                        Text(
+                            text = "🕒 وقت التحديث: ${summary.updatedTimestamp}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = DarkTextSecondary
+                        )
+                    }
                 }
             },
             confirmButton = {

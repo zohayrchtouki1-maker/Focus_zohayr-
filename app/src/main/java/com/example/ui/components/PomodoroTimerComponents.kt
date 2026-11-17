@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timer
@@ -256,7 +257,9 @@ fun FullScreenTimerOverlay(
     onSelectTask: (String?) -> Unit,
     onCompleteActiveTask: (String) -> Unit,
     onSetWhiteNoise: (WhiteNoiseType) -> Unit,
-    onSetWhiteNoiseVolume: (Float) -> Unit
+    onSetWhiteNoiseVolume: (Float) -> Unit,
+    onOpenStrictBlockerSetup: () -> Unit = {},
+    onDismissStatusBanner: () -> Unit = {}
 ) {
     val timer = uiState.timer
     val settings = uiState.data.settings
@@ -399,7 +402,74 @@ fun FullScreenTimerOverlay(
                 }
 
                 Spacer(modifier = Modifier.weight(1f))
-                Spacer(modifier = Modifier.width(48.dp))
+
+                // Shield Icon Button: 🛡️ الحظر الصارم
+                val blockerReady = uiState.strictBlockerPermissions.isFullyReady &&
+                    (timer.strictMode || settings.strictBlockerEnabled)
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (blockerReady) ForestEmerald.copy(alpha = 0.2f) else Color(0xFF1C1C21),
+                    border = BorderStroke(
+                        1.dp,
+                        if (blockerReady) ForestEmerald.copy(alpha = 0.7f) else CoralPrimary.copy(alpha = 0.65f)
+                    ),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable { onOpenStrictBlockerSetup() }
+                        .testTag("open_strict_blocker_button")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = "🛡️ الحظر الصارم",
+                            tint = if (blockerReady) ForestEmerald else CoralPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "🛡️ الحظر الصارم",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+            }
+
+            if (!uiState.statusBannerMessage.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = CoralPrimary.copy(alpha = 0.22f),
+                    border = BorderStroke(1.dp, CoralPrimary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onDismissStatusBanner() }
+                        .testTag("strict_blocker_warning_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = uiState.statusBannerMessage,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.weight(1f))
@@ -420,10 +490,13 @@ fun FullScreenTimerOverlay(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                     )
                 }
-                if (timer.strictMode) {
+                if (timer.strictMode || settings.strictBlockerEnabled) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFFF39C12).copy(alpha = 0.25f)
+                        color = Color(0xFFF39C12).copy(alpha = 0.25f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onOpenStrictBlockerSetup() }
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -631,10 +704,10 @@ fun FullScreenTimerOverlay(
                     )
 
                     TimerToolbarItem(
-                        icon = if (timer.strictMode) Icons.Default.Lock else Icons.Default.LockOpen,
-                        label = s.strictMode,
-                        active = timer.strictMode,
-                        onClick = onToggleStrictMode,
+                        icon = Icons.Default.Security,
+                        label = "🛡️ الحظر الصارم",
+                        active = timer.strictMode || settings.strictBlockerEnabled,
+                        onClick = onOpenStrictBlockerSetup,
                         modifier = Modifier.testTag("timer_strict_toggle")
                     )
 

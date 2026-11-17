@@ -238,7 +238,9 @@ data class AppSettings(
     val darkTheme: Boolean = true,
     val language: AppLanguage = AppLanguage.AR,
     val whiteNoise: WhiteNoiseType = WhiteNoiseType.NONE,
-    val whiteNoiseVolume: Float = 0.6f
+    val whiteNoiseVolume: Float = 0.6f,
+    val strictBlockerEnabled: Boolean = false,
+    val whitelistedPackages: List<String> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)
@@ -267,5 +269,6 @@ data class ManualBackupExportSummary(
     val tasksCount: Int,
     val subtasksCount: Int,
     val pomodoroSessionsCount: Int,
-    val totalPrefsCount: Int
+    val totalPrefsCount: Int,
+    val updatedTimestamp: String = ""
 )

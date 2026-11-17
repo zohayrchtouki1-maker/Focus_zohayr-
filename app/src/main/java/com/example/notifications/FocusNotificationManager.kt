@@ -657,6 +657,9 @@ object FocusNotificationManager {
             appendLine("☑️ المهام الفرعية: ${summary.subtasksCount}")
             appendLine("🍅 جلسات البومودورو والإحصائيات: ${summary.pomodoroSessionsCount}")
             appendLine("⚙️ الإعدادات والتفضيلات: ${summary.totalPrefsCount} إعداد")
+            if (summary.updatedTimestamp.isNotBlank()) {
+                appendLine("🕒 وقت التحديث: ${summary.updatedTimestamp}")
+            }
             append("💾 حجم الملف: ${summary.formattedFileSize} (${summary.fileName})")
         }
 

@@ -42,6 +42,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.blocker.StrictAppBlockerManager
 import com.example.i18n.AppStrings
 import com.example.model.AppLanguage
 import com.example.model.TaskPriority
@@ -55,6 +56,7 @@ import com.example.ui.components.MainTaskWorkspace
 import com.example.ui.components.ReportsDialog
 import com.example.ui.components.SettingsDialog
 import com.example.ui.components.SidebarPanel
+import com.example.ui.components.StrictBlockerSetupDialog
 import com.example.ui.components.TaskInspectorPanel
 import com.example.ui.theme.CoralPrimary
 import com.example.ui.theme.FocusTodoTheme
@@ -70,6 +72,10 @@ class MainActivity : ComponentActivity() {
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
             LaunchedEffect(Unit) {
+                if (intent?.getBooleanExtra(StrictAppBlockerManager.EXTRA_STRICT_BLOCK_TRIGGERED, false) == true) {
+                    viewModel.notifyStrictBlockTriggered()
+                    intent?.removeExtra(StrictAppBlockerManager.EXTRA_STRICT_BLOCK_TRIGGERED)
+                }
                 if (intent?.getBooleanExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER, false) == true) {
                     viewModel.setShowFullScreenTimer(true)
                     intent?.removeExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER)
@@ -78,6 +84,10 @@ class MainActivity : ComponentActivity() {
 
             DisposableEffect(Unit) {
                 val listener = androidx.core.util.Consumer<android.content.Intent> { newIntent ->
+                    if (newIntent.getBooleanExtra(StrictAppBlockerManager.EXTRA_STRICT_BLOCK_TRIGGERED, false)) {
+                        viewModel.notifyStrictBlockTriggered()
+                        newIntent.removeExtra(StrictAppBlockerManager.EXTRA_STRICT_BLOCK_TRIGGERED)
+                    }
                     if (newIntent.getBooleanExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER, false)) {
                         viewModel.setShowFullScreenTimer(true)
                         newIntent.removeExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER)
@@ -378,7 +388,24 @@ fun FocusTodoAppRoot(
                         onSelectTask = { viewModel.selectActiveFocusTask(it) },
                         onCompleteActiveTask = { viewModel.toggleTaskCompleted(it) },
                         onSetWhiteNoise = { viewModel.setWhiteNoise(it) },
-                        onSetWhiteNoiseVolume = { viewModel.setWhiteNoiseVolume(it) }
+                        onSetWhiteNoiseVolume = { viewModel.setWhiteNoiseVolume(it) },
+                        onOpenStrictBlockerSetup = { viewModel.setShowStrictBlockerSetup(true) },
+                        onDismissStatusBanner = { viewModel.clearStatusBanner() }
+                    )
+                }
+
+                // Strict App Blocker Setup & Whitelist Screen (🛡️ الحظر الصارم)
+                AnimatedVisibility(
+                    visible = uiState.showStrictBlockerSetup,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it / 6 }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 6 })
+                ) {
+                    StrictBlockerSetupDialog(
+                        uiState = uiState,
+                        onDismiss = { viewModel.setShowStrictBlockerSetup(false) },
+                        onSetStrictBlockerEnabled = { viewModel.setStrictBlockerEnabled(it) },
+                        onToggleWhitelistedApp = { viewModel.toggleWhitelistedApp(it) },
+                        onRefreshBlockerPermissions = { viewModel.refreshStrictBlockerPermissions() }
                     )
                 }
 

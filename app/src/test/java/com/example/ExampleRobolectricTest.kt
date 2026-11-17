@@ -162,15 +162,8 @@ class ExampleRobolectricTest {
     fun `local backup generates focus_zohayr_backup filename and supports exhaustive v3 export and restore`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val repo = FocusRepository(context)
-        val fileName = FocusRepository.generateBackupFileName()
-        assertTrue(fileName.matches(Regex("^focus_zohayr_backup_\\d{4}-\\d{2}-\\d{2}\\.json$")))
-
-        val manualTimestampedName = FocusRepository.generateManualTimestampedBackupFileName()
-        assertTrue(
-            manualTimestampedName.matches(
-                Regex("^focus_zohayr_backup_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}\\.json$")
-            )
-        )
+        assertEquals("focus_zohayr_backup.json", FocusRepository.MASTER_BACKUP_FILE_NAME)
+        assertEquals("focus_zohayr_backup.json", FocusRepository.AUTO_BACKUP_FILE_NAME)
 
         kotlinx.coroutines.runBlocking {
             val initialSeed = SeedData.createInitialState()
@@ -241,13 +234,14 @@ class ExampleRobolectricTest {
             val summaryRes = repo.exportManualBackupWithSummary(loadedState)
             assertTrue(summaryRes.isSuccess)
             val summary = summaryRes.getOrNull()!!
-            assertTrue(summary.fileName.startsWith("focus_zohayr_backup_"))
+            assertEquals("focus_zohayr_backup.json", summary.fileName)
             assertEquals(5, summary.projectsCount)
             assertEquals(1, summary.tasksCount)
             assertEquals(2, summary.subtasksCount)
             assertEquals(1, summary.pomodoroSessionsCount)
             assertTrue(summary.totalPrefsCount > 0)
             assertTrue(summary.fileSizeBytes > 0L)
+            assertTrue(summary.updatedTimestamp.isNotBlank())
 
             val exportedJson = repo.exportJson(loadedState)
             assertTrue(exportedJson.contains("\"backupVersion\": 3"))
@@ -291,11 +285,67 @@ class ExampleRobolectricTest {
             // Test Shareable file creation
             val shareFile = repo.createShareableBackupFile(merged)
             assertTrue(shareFile.exists())
-            assertTrue(shareFile.name.startsWith("focus_zohayr_backup_"))
+            assertEquals("focus_zohayr_backup.json", shareFile.name)
 
             // Test JSON validation rejects invalid payload
             val invalidParsed = repo.parseBackupJson("{\"invalid_key\": 123}")
             assertEquals(null, invalidParsed)
         }
+    }
+
+    @Test
+    fun `strict app blocker enforces default-deny whitelist during active focus and persists in backup`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.example.blocker.StrictAppBlockerManager.setStrictBlockerEnabled(context, true)
+        com.example.blocker.StrictAppBlockerManager.setWhitelistedPackages(
+            context,
+            setOf("com.whatsapp", "com.google.android.calculator")
+        )
+
+        // Simulate active Pomodoro Focus session
+        com.example.blocker.StrictAppBlockerManager.syncTimerState(
+            context = context,
+            isRunning = true,
+            phase = TimerPhase.FOCUS,
+            strictMode = true,
+            timerEndTimeEpochMillis = System.currentTimeMillis() + 600_000L,
+            countMode = com.example.model.TimerCountMode.COUNTDOWN
+        )
+
+        assertTrue(com.example.blocker.StrictAppBlockerManager.isStrictFocusSessionActivelyRunning(context))
+        // Focus_zohayr itself is allowed
+        assertEquals(
+            false,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, context.packageName)
+        )
+        // Whitelisted app is allowed
+        assertEquals(
+            false,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.whatsapp")
+        )
+        // Android Settings is strictly blocked during active focus
+        assertEquals(
+            true,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.android.settings")
+        )
+        // Non-whitelisted third-party app is strictly blocked
+        assertEquals(
+            true,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.zhiliaoapp.musically")
+        )
+
+        // When in SHORT_BREAK, strict blocker does not block apps
+        com.example.blocker.StrictAppBlockerManager.syncTimerState(
+            context = context,
+            isRunning = true,
+            phase = TimerPhase.SHORT_BREAK,
+            strictMode = true,
+            timerEndTimeEpochMillis = System.currentTimeMillis() + 300_000L,
+            countMode = com.example.model.TimerCountMode.COUNTDOWN
+        )
+        assertEquals(
+            false,
+            com.example.blocker.StrictAppBlockerManager.shouldBlockPackageImmediately(context, "com.zhiliaoapp.musically")
+        )
     }
 }

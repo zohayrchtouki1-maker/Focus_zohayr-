@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.audio.SoundSynthesizer
+import com.example.blocker.StrictAppBlockerManager
+import com.example.blocker.StrictBlockerPermissionStatus
 import com.example.data.BackupImportMode
 import com.example.data.DateUtils
 import com.example.data.FocusRepository
@@ -81,8 +83,10 @@ data class MainUiState(
     val showForest: Boolean = false,
     val showSettings: Boolean = false,
     val showBackgroundPermissionsModal: Boolean = false,
+    val showStrictBlockerSetup: Boolean = false,
     val timer: TimerUiState = TimerUiState(),
     val systemPermissions: SystemPermissionSnapshot = SystemPermissionSnapshot(),
+    val strictBlockerPermissions: StrictBlockerPermissionStatus = StrictBlockerPermissionStatus(),
     val permissionRequestTrigger: Int = 0,
     val statusBannerMessage: String? = null,
     val lastAutoBackupTimeMillis: Long = 0L
@@ -107,8 +111,11 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 settings = rawLoaded.settings.copy(darkTheme = true)
             )
             val defaultFocusSecs = loaded.settings.pomodoroMinutes * 60
-            val restoredTimer = restorePersistedTimer(loaded.persistedTimer, defaultFocusSecs)
+            val restoredTimer = restorePersistedTimer(loaded.persistedTimer, defaultFocusSecs).let { t ->
+                t.copy(strictMode = t.strictMode || loaded.settings.strictBlockerEnabled)
+            }
             val permSnapshot = SystemPermissionsHelper.getSnapshot(appContext)
+            val blockerPerms = StrictAppBlockerManager.getPermissionStatus(appContext)
             val shouldPromptOnLaunch = !permSnapshot.notificationsGranted
 
             val lastAutoBackup = repository.getLastAutoBackupTimeMillis()
@@ -119,10 +126,12 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     data = loaded,
                     timer = restoredTimer,
                     systemPermissions = permSnapshot,
+                    strictBlockerPermissions = blockerPerms,
                     permissionRequestTrigger = if (shouldPromptOnLaunch) it.permissionRequestTrigger + 1 else it.permissionRequestTrigger,
                     lastAutoBackupTimeMillis = lastAutoBackup
                 )
             }
+            syncStrictBlockerTimerState()
 
             // Re-verify and schedule all upcoming task reminder alarms on app startup
             FocusNotificationManager.syncAllTaskReminders(
@@ -159,6 +168,18 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                             toggleTaskCompleted(event.taskId)
                         }
                     }
+                }
+            }
+        }
+
+        // Listen for blocked app enforcement events from FocusBlockerAccessibilityService
+        viewModelScope.launch {
+            StrictAppBlockerManager.blockedEvents.collect {
+                _uiState.update { state ->
+                    state.copy(
+                        showFullScreenTimer = true,
+                        statusBannerMessage = StrictAppBlockerManager.STRICT_BLOCK_MESSAGE_AR
+                    )
                 }
             }
         }
@@ -219,12 +240,27 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun syncStrictBlockerTimerState() {
+        val state = _uiState.value
+        val t = state.timer
+        val isStrict = t.strictMode || state.data.settings.strictBlockerEnabled
+        StrictAppBlockerManager.syncTimerState(
+            context = appContext,
+            isRunning = t.isRunning,
+            phase = t.phase,
+            strictMode = isStrict,
+            timerEndTimeEpochMillis = t.timerEndTimeEpochMillis,
+            countMode = t.countMode
+        )
+    }
+
     private fun saveCurrentTimerToStorage() {
         val state = _uiState.value
         val nextData = state.data.copy(persistedTimer = state.timer.toPersisted())
         _uiState.update {
             it.copy(data = nextData)
         }
+        syncStrictBlockerTimerState()
         viewModelScope.launch {
             repository.saveState(nextData)
             val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
@@ -234,7 +270,18 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun refreshSystemPermissions() {
         val snapshot = SystemPermissionsHelper.getSnapshot(appContext)
-        _uiState.update { it.copy(systemPermissions = snapshot) }
+        val blockerPerms = StrictAppBlockerManager.getPermissionStatus(appContext)
+        _uiState.update {
+            it.copy(
+                systemPermissions = snapshot,
+                strictBlockerPermissions = blockerPerms
+            )
+        }
+    }
+
+    fun refreshStrictBlockerPermissions() {
+        val blockerPerms = StrictAppBlockerManager.getPermissionStatus(appContext)
+        _uiState.update { it.copy(strictBlockerPermissions = blockerPerms) }
     }
 
     fun requestNativePermissionsIfMissing() {
@@ -300,6 +347,49 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun setShowBackgroundPermissionsModal(show: Boolean) {
         if (show) refreshSystemPermissions()
         _uiState.update { it.copy(showBackgroundPermissionsModal = show) }
+    }
+
+    fun setShowStrictBlockerSetup(show: Boolean) {
+        if (show) refreshStrictBlockerPermissions()
+        _uiState.update { it.copy(showStrictBlockerSetup = show) }
+    }
+
+    fun notifyStrictBlockTriggered() {
+        _uiState.update {
+            it.copy(
+                showFullScreenTimer = true,
+                statusBannerMessage = StrictAppBlockerManager.STRICT_BLOCK_MESSAGE_AR
+            )
+        }
+    }
+
+    fun setStrictBlockerEnabled(enabled: Boolean) {
+        val t = _uiState.value.timer
+        if (!enabled && t.isRunning && t.phase == TimerPhase.FOCUS) {
+            _uiState.update {
+                it.copy(statusBannerMessage = "🔒 لا يمكن إيقاف الحظر الصارم أثناء جلسة التركيز الجارية!")
+            }
+            return
+        }
+        StrictAppBlockerManager.setStrictBlockerEnabled(appContext, enabled)
+        _uiState.update { state ->
+            state.copy(
+                timer = state.timer.copy(strictMode = enabled),
+                data = state.data.copy(
+                    settings = state.data.settings.copy(strictBlockerEnabled = enabled)
+                )
+            )
+        }
+        saveCurrentTimerToStorage()
+        if (_uiState.value.timer.isRunning) {
+            updateOngoingNotificationTick()
+        }
+    }
+
+    fun toggleWhitelistedApp(packageName: String) {
+        val updatedSet = StrictAppBlockerManager.toggleWhitelistedPackage(appContext, packageName)
+        val sortedList = updatedSet.sorted()
+        updateSettings { it.copy(whitelistedPackages = sortedList) }
     }
 
     fun clearStatusBanner() {
@@ -617,7 +707,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     timerEndTimeEpochMillis = endTime,
                     stopwatchStartTimeEpochMillis = now,
                     isRunning = true,
-                    hasStarted = true
+                    hasStarted = true,
+                    strictMode = state.timer.strictMode || state.data.settings.strictBlockerEnabled
                 )
             )
         }
@@ -659,6 +750,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 timer = t.copy(
                     isRunning = true,
                     hasStarted = true,
+                    strictMode = t.strictMode || state.data.settings.strictBlockerEnabled,
                     timerEndTimeEpochMillis = endTime,
                     stopwatchStartTimeEpochMillis = swStart
                 )
@@ -792,13 +884,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun toggleStrictMode() {
-        _uiState.update { state ->
-            state.copy(timer = state.timer.copy(strictMode = !state.timer.strictMode))
-        }
-        saveCurrentTimerToStorage()
-        if (_uiState.value.timer.isRunning) {
-            updateOngoingNotificationTick()
-        }
+        val current = _uiState.value.timer.strictMode || _uiState.value.data.settings.strictBlockerEnabled
+        setStrictBlockerEnabled(!current)
     }
 
     private fun syncRunningTimerNotificationsAndAlarms() {
@@ -1294,11 +1381,15 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     selectedTaskId = null,
                     timer = TimerUiState(
                         totalPhaseSeconds = restoredSecs,
-                        remainingSeconds = restoredSecs
+                        remainingSeconds = restoredSecs,
+                        strictMode = restored.settings.strictBlockerEnabled
                     ),
                     lastAutoBackupTimeMillis = updatedBackupTs
                 )
             }
+            StrictAppBlockerManager.setStrictBlockerEnabled(appContext, restored.settings.strictBlockerEnabled)
+            StrictAppBlockerManager.setWhitelistedPackages(appContext, restored.settings.whitelistedPackages.toSet())
+            syncStrictBlockerTimerState()
             FocusNotificationManager.syncAllTaskReminders(appContext, restored.tasks, restored.settings)
             syncWhiteNoise()
         }

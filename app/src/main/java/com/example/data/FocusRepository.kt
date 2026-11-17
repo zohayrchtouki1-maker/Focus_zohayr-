@@ -43,21 +43,13 @@ class FocusRepository(private val context: Context) {
 
         const val BACKUP_FOLDER_NAME = "Focus_Zohayr"
         const val BACKUP_DISPLAY_PATH = "Documents/Focus_Zohayr"
-        const val AUTO_BACKUP_FILE_NAME = "focus_zohayr_auto_backup.json"
+        const val MASTER_BACKUP_FILE_NAME = "focus_zohayr_backup.json"
+        const val AUTO_BACKUP_FILE_NAME = MASTER_BACKUP_FILE_NAME
+        private const val LEGACY_AUTO_BACKUP_FILE_NAME = "focus_zohayr_auto_backup.json"
 
         private val backupMutex = Mutex()
         @Volatile
         private var latestKnownState: AppBackupState? = null
-
-        fun generateBackupFileName(nowMillis: Long = System.currentTimeMillis()): String {
-            val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(Date(nowMillis))
-            return "focus_zohayr_backup_$dateStr.json"
-        }
-
-        fun generateManualTimestampedBackupFileName(nowMillis: Long = System.currentTimeMillis()): String {
-            val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ENGLISH).format(Date(nowMillis))
-            return "focus_zohayr_backup_$stamp.json"
-        }
 
         fun formatBackupTimestamp(epochMillis: Long, isArabic: Boolean = true): String {
             if (epochMillis <= 0L) {
@@ -157,10 +149,11 @@ class FocusRepository(private val context: Context) {
             val now = System.currentTimeMillis()
             prefs.edit().putLong(PREFS_LAST_AUTO_BACKUP_TIME, now).commit()
             writeJsonToDocumentsFolder(
-                fileName = AUTO_BACKUP_FILE_NAME,
+                fileName = MASTER_BACKUP_FILE_NAME,
                 json = json,
                 overwriteExisting = true
             )
+            removeLegacyAutoBackupFileIfPresent()
         } catch (_: Exception) {
         }
     }
@@ -185,6 +178,8 @@ class FocusRepository(private val context: Context) {
                 .putString("setting_language", settings.language.name)
                 .putString("setting_white_noise", settings.whiteNoise.name)
                 .putFloat("setting_white_noise_volume", settings.whiteNoiseVolume)
+                .putBoolean("strict_blocker_enabled", settings.strictBlockerEnabled)
+                .putStringSet("strict_blocker_whitelisted_packages", settings.whitelistedPackages.toSet())
                 .commit()
         } catch (_: Exception) {
         }
@@ -338,6 +333,14 @@ class FocusRepository(private val context: Context) {
             )
         }
 
+        val spStrictEnabled = prefs.getBoolean("strict_blocker_enabled", loaded.settings.strictBlockerEnabled)
+        val spWhitelist = prefs.getStringSet("strict_blocker_whitelisted_packages", null)?.toList()
+        val mergedWhitelist = (loaded.settings.whitelistedPackages + spWhitelist.orEmpty()).distinct().sorted()
+        val reconciledSettings = loaded.settings.copy(
+            strictBlockerEnabled = loaded.settings.strictBlockerEnabled || spStrictEnabled,
+            whitelistedPackages = mergedWhitelist
+        )
+
         val normalizedFolders = loaded.folders.mapIndexed { idx, folder ->
             folder.copy(sortOrder = if (folder.sortOrder != 0) folder.sortOrder else idx)
         }
@@ -366,7 +369,8 @@ class FocusRepository(private val context: Context) {
             folders = normalizedFolders,
             focusRecords = combinedSessions,
             pomodoroSessions = combinedSessions,
-            focusStats = stats
+            focusStats = stats,
+            settings = reconciledSettings
         )
     }
 
@@ -397,8 +401,8 @@ class FocusRepository(private val context: Context) {
     ): Result<ManualBackupExportSummary> = withContext(Dispatchers.IO) {
         backupMutex.withLock {
             return@withContext try {
-                val fileName = generateManualTimestampedBackupFileName(nowMillis)
-                val enriched = enrichStateForFullExport(state)
+                val fileName = MASTER_BACKUP_FILE_NAME
+                val enriched = enrichStateForFullExport(state).copy(exportedAt = nowMillis)
                 val json = adapter.toJson(enriched)
                 val bytes = json.toByteArray(Charsets.UTF_8)
                 writeJsonToDocumentsFolder(
@@ -406,18 +410,8 @@ class FocusRepository(private val context: Context) {
                     json = json,
                     overwriteExisting = true
                 )
-                val now = System.currentTimeMillis()
-                prefs.edit().putLong(PREFS_LAST_AUTO_BACKUP_TIME, now).commit()
-
-                // Also update the auto-backup file so both manual and auto files are in sync
-                try {
-                    writeJsonToDocumentsFolder(
-                        fileName = AUTO_BACKUP_FILE_NAME,
-                        json = json,
-                        overwriteExisting = true
-                    )
-                } catch (_: Exception) {
-                }
+                removeLegacyAutoBackupFileIfPresent()
+                prefs.edit().putLong(PREFS_LAST_AUTO_BACKUP_TIME, nowMillis).commit()
 
                 val totalPrefsCount = enriched.allPreferences.values.sumOf { it.size }
                 val summary = ManualBackupExportSummary(
@@ -428,7 +422,8 @@ class FocusRepository(private val context: Context) {
                     tasksCount = enriched.tasks.size,
                     subtasksCount = enriched.subtasks.size,
                     pomodoroSessionsCount = enriched.pomodoroSessions.size,
-                    totalPrefsCount = totalPrefsCount
+                    totalPrefsCount = totalPrefsCount,
+                    updatedTimestamp = formatBackupTimestamp(nowMillis, true)
                 )
                 Result.success(summary)
             } catch (e: Exception) {
@@ -491,13 +486,24 @@ class FocusRepository(private val context: Context) {
                         arrayOf(MediaStore.MediaColumns._ID),
                         selection,
                         selectionArgs,
-                        null
+                        "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
                     )?.use { cursor ->
                         if (cursor.moveToFirst()) {
                             val id = cursor.getLong(0)
                             val existingUri = ContentUris.withAppendedId(collectionUri, id)
+                            // Remove any extra duplicate MediaStore rows for the same filename
+                            while (cursor.moveToNext()) {
+                                val dupId = cursor.getLong(0)
+                                val dupUri = ContentUris.withAppendedId(collectionUri, dupId)
+                                try {
+                                    resolver.delete(dupUri, null, null)
+                                } catch (_: Exception) {
+                                }
+                            }
                             val wroteExisting = try {
-                                resolver.openOutputStream(existingUri, "wt")?.use { out ->
+                                (resolver.openOutputStream(existingUri, "wt")
+                                    ?: resolver.openOutputStream(existingUri, "rwt")
+                                    ?: resolver.openOutputStream(existingUri))?.use { out ->
                                     out.write(bytes)
                                     out.flush()
                                     true
@@ -606,6 +612,52 @@ class FocusRepository(private val context: Context) {
         }
     }
 
+    private fun removeLegacyAutoBackupFileIfPresent() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = context.contentResolver
+                val collectionUri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+                val selectionArgs = arrayOf(LEGACY_AUTO_BACKUP_FILE_NAME, "${Environment.DIRECTORY_DOCUMENTS}/$BACKUP_FOLDER_NAME%")
+                resolver.query(
+                    collectionUri,
+                    arrayOf(MediaStore.MediaColumns._ID),
+                    selection,
+                    selectionArgs,
+                    null
+                )?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(0)
+                        val legacyUri = ContentUris.withAppendedId(collectionUri, id)
+                        try {
+                            resolver.delete(legacyUri, null, null)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        try {
+            val publicDocs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+            if (publicDocs != null) {
+                val legacyPublicFile = File(File(publicDocs, BACKUP_FOLDER_NAME), LEGACY_AUTO_BACKUP_FILE_NAME)
+                if (legacyPublicFile.exists()) {
+                    legacyPublicFile.delete()
+                }
+            }
+        } catch (_: Exception) {
+        }
+        try {
+            val internalFallbackDir = File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
+            val legacyInternalFile = File(internalFallbackDir, LEGACY_AUTO_BACKUP_FILE_NAME)
+            if (legacyInternalFile.exists()) {
+                legacyInternalFile.delete()
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     private fun readStateFromFile(file: File): AppBackupState? {
         return try {
             if (file.exists()) {
@@ -696,8 +748,7 @@ class FocusRepository(private val context: Context) {
     fun createShareableBackupFile(state: AppBackupState): File {
         val backupsDir = File(context.cacheDir, "backups")
         if (!backupsDir.exists()) backupsDir.mkdirs()
-        val fileName = generateBackupFileName()
-        val outFile = File(backupsDir, fileName)
+        val outFile = File(backupsDir, MASTER_BACKUP_FILE_NAME)
         outFile.writeText(exportJson(state), Charsets.UTF_8)
         return outFile
     }
@@ -748,7 +799,9 @@ class FocusRepository(private val context: Context) {
             whiteNoise = entries["setting_white_noise"]?.stringValue?.let {
                 runCatching { WhiteNoiseType.valueOf(it) }.getOrNull()
             } ?: base.whiteNoise,
-            whiteNoiseVolume = entries["setting_white_noise_volume"]?.floatValue ?: base.whiteNoiseVolume
+            whiteNoiseVolume = entries["setting_white_noise_volume"]?.floatValue ?: base.whiteNoiseVolume,
+            strictBlockerEnabled = entries["strict_blocker_enabled"]?.booleanValue ?: base.strictBlockerEnabled,
+            whitelistedPackages = entries["strict_blocker_whitelisted_packages"]?.stringSetValue ?: base.whitelistedPackages
         )
     }
 }
