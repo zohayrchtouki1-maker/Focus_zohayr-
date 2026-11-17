@@ -83,7 +83,8 @@ data class MainUiState(
     val timer: TimerUiState = TimerUiState(),
     val systemPermissions: SystemPermissionSnapshot = SystemPermissionSnapshot(),
     val permissionRequestTrigger: Int = 0,
-    val statusBannerMessage: String? = null
+    val statusBannerMessage: String? = null,
+    val lastAutoBackupTimeMillis: Long = 0L
 )
 
 class FocusTodoViewModel(application: Application) : AndroidViewModel(application) {
@@ -109,13 +110,16 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             val permSnapshot = SystemPermissionsHelper.getSnapshot(appContext)
             val shouldPromptOnLaunch = !permSnapshot.notificationsGranted
 
+            val lastAutoBackup = repository.getLastAutoBackupTimeMillis()
+
             _uiState.update {
                 it.copy(
                     isLoaded = true,
                     data = loaded,
                     timer = restoredTimer,
                     systemPermissions = permSnapshot,
-                    permissionRequestTrigger = if (shouldPromptOnLaunch) it.permissionRequestTrigger + 1 else it.permissionRequestTrigger
+                    permissionRequestTrigger = if (shouldPromptOnLaunch) it.permissionRequestTrigger + 1 else it.permissionRequestTrigger,
+                    lastAutoBackupTimeMillis = lastAutoBackup
                 )
             }
 
@@ -207,6 +211,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             )
             viewModelScope.launch {
                 repository.saveState(nextData)
+                val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
+                _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
             }
             state.copy(data = nextData)
         }
@@ -220,6 +226,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         }
         viewModelScope.launch {
             repository.saveState(nextData)
+            val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
+            _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
         }
     }
 
@@ -1203,6 +1211,19 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         return repository.exportJson(_uiState.value.data)
     }
 
+    fun exportManualBackupToDocuments(onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            val res = try {
+                repository.exportManualBackupToDocuments(_uiState.value.data)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
+            _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
+            onResult(res)
+        }
+    }
+
     fun createShareableBackupFile(): java.io.File {
         return repository.createShareableBackupFile(_uiState.value.data)
     }
@@ -1238,7 +1259,11 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             )
         }
-        viewModelScope.launch { repository.saveState(targetState) }
+        viewModelScope.launch {
+            repository.saveState(targetState)
+            val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
+            _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
+        }
         FocusNotificationManager.syncAllTaskReminders(appContext, targetState.tasks, targetState.settings)
         syncWhiteNoise()
     }
@@ -1261,7 +1286,11 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             )
         }
-        viewModelScope.launch { repository.saveState(demo) }
+        viewModelScope.launch {
+            repository.saveState(demo)
+            val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
+            _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
+        }
         FocusNotificationManager.syncAllTaskReminders(appContext, demo.tasks, demo.settings)
         syncWhiteNoise()
     }

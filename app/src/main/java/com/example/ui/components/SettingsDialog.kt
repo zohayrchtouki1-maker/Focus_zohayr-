@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.content.Intent
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,10 +34,9 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MergeType
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SaveAlt
@@ -45,13 +45,13 @@ import androidx.compose.material.icons.filled.SettingsApplications
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -62,6 +62,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -82,6 +83,7 @@ import com.example.i18n.Strings
 import com.example.model.AppBackupState
 import com.example.model.AppLanguage
 import com.example.model.AppSettings
+import com.example.notifications.FocusNotificationManager
 import com.example.notifications.SystemPermissionsHelper
 import com.example.ui.theme.CoralPrimary
 import com.example.ui.theme.DarkBackground
@@ -108,6 +110,7 @@ fun SettingsDialog(
     onRequestPermissions: () -> Unit,
     onOpenBackgroundPermissionsModal: () -> Unit,
     onExportJson: () -> String,
+    onExportManualBackupToDocuments: ((Result<String>) -> Unit) -> Unit = {},
     onCreateShareableBackupFile: () -> File,
     onParseBackupPreview: (String) -> AppBackupState?,
     onImportBackupState: (AppBackupState, BackupImportMode) -> Unit,
@@ -123,33 +126,54 @@ fun SettingsDialog(
     var backupIsError by remember { mutableStateOf(false) }
     var pendingImportState by remember { mutableStateOf<AppBackupState?>(null) }
 
+    // 3x Consecutive Failure Warning State (1/3 -> 2/3 -> 3/3)
+    var failureWarningStep by remember { mutableIntStateOf(0) }
+    var failureWarningReason by remember { mutableStateOf("") }
+
     var expandPomodoroSection by remember { mutableStateOf(false) }
     var expandProjectsSection by remember { mutableStateOf(false) }
     var expandGeneralSection by remember { mutableStateOf(false) }
     var expandAppearanceSection by remember { mutableStateOf(false) }
     var showUserGuideDialog by remember { mutableStateOf(false) }
 
-    val defaultBackupFileName = remember { FocusRepository.generateBackupFileName() }
+    fun trigger3xExportFailureWarning(reason: String) {
+        val cleanReason = reason.ifBlank { "تعذر الوصول إلى مجلد Documents/Focus_Zohayr" }
+        failureWarningReason = cleanReason
+        failureWarningStep = 1
+        backupIsError = true
+        backupFeedback = "فشل حفظ النسخة الاحتياطية في مجلد Documents/Focus_Zohayr ($cleanReason)"
+        FocusNotificationManager.showBackupWarningNotification(
+            context = context,
+            step = 1,
+            totalSteps = 3,
+            errorReason = cleanReason
+        )
+    }
 
-    val exportSaveLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        if (uri != null) {
-            try {
-                val json = onExportJson()
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    out.write(json.toByteArray(Charsets.UTF_8))
-                }
-                backupIsError = false
-                backupFeedback = if (isArabic) {
-                    "تم حفظ النسخة الاحتياطية بنجاح ($defaultBackupFileName)"
-                } else {
-                    "Backup saved successfully ($defaultBackupFileName)"
-                }
-            } catch (_: Exception) {
-                backupIsError = true
-                backupFeedback = s.backupError
+    fun triggerManualExportNow() {
+        try {
+            onExportManualBackupToDocuments { result ->
+                result.fold(
+                    onSuccess = { createdFileName ->
+                        backupIsError = false
+                        val msg = "تم حفظ النسخة الاحتياطية بنجاح في مجلد Documents/Focus_Zohayr ($createdFileName)"
+                        backupFeedback = msg
+                        try {
+                            Toast.makeText(
+                                context,
+                                "تم حفظ النسخة الاحتياطية بنجاح في مجلد Documents/Focus_Zohayr",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } catch (_: Exception) {
+                        }
+                    },
+                    onFailure = { err ->
+                        trigger3xExportFailureWarning(err.localizedMessage ?: "خطأ في كتابة الملف")
+                    }
+                )
             }
+        } catch (e: Exception) {
+            trigger3xExportFailureWarning(e.localizedMessage ?: "خطأ غير متوقع أثناء التصدير")
         }
     }
 
@@ -181,12 +205,12 @@ fun SettingsDialog(
             context.startActivity(chooser)
             backupIsError = false
             backupFeedback = if (isArabic) {
-                "تم تجهيز ملف النسخة الاحتياطية (${backupFile.name}) للمشاركة أو الحفظ"
+                "تم تجهيز ملف النسخة الاحتياطية (${backupFile.name}) للمشاركة"
             } else {
-                "Backup file (${backupFile.name}) ready to share or save"
+                "Backup file (${backupFile.name}) ready to share"
             }
-        } catch (_: Exception) {
-            exportSaveLauncher.launch(FocusRepository.generateBackupFileName())
+        } catch (e: Exception) {
+            trigger3xExportFailureWarning(e.localizedMessage ?: "تعذر مشاركة ملف النسخة الاحتياطية")
         }
     }
 
@@ -205,7 +229,7 @@ fun SettingsDialog(
                 } else {
                     backupIsError = true
                     backupFeedback = if (isArabic) {
-                        "ملف النسخة الاحتياطية غير صالح أو تالف."
+                        "ملف النسخة الاحتياطية غير صالح أو لا يطابق بنية JSON المطلوبة."
                     } else {
                         "Invalid or corrupted backup JSON file."
                     }
@@ -215,6 +239,10 @@ fun SettingsDialog(
                 backupFeedback = s.backupError
             }
         }
+    }
+
+    val formattedLastAutoBackup = remember(uiState.lastAutoBackupTimeMillis, isArabic) {
+        FocusRepository.formatBackupTimestamp(uiState.lastAutoBackupTimeMillis, isArabic)
     }
 
     Surface(
@@ -262,10 +290,9 @@ fun SettingsDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                // Group 1: Local Backup & Restore (النسخ الاحتياطي والاستيراد)
+                // Group 1: Local Backup & Restore ("النسخ الاحتياطي المحلي (JSON)")
                 item {
                     GroupedSettingsCard {
-                        // Top profile/status header row
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -282,10 +309,10 @@ fun SettingsDialog(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Person,
+                                        imageVector = Icons.Default.Folder,
                                         contentDescription = null,
-                                        tint = DarkTextSecondary,
-                                        modifier = Modifier.size(24.dp)
+                                        tint = CoralPrimary,
+                                        modifier = Modifier.size(22.dp)
                                     )
                                 }
                                 Box(
@@ -297,20 +324,30 @@ fun SettingsDialog(
                                 )
                             }
                             Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
                                 Text(
-                                    text = if (isArabic) "النسخ الاحتياطي والاستيراد" else "Backup & Restore",
+                                    text = if (isArabic) "النسخ الاحتياطي المحلي (JSON)" else "Local Backup (JSON)",
                                     fontSize = 15.sp,
-                                    fontWeight = FontWeight.SemiBold,
+                                    fontWeight = FontWeight.Bold,
                                     color = DarkTextPrimary
                                 )
                                 Text(
                                     text = if (isArabic) {
-                                        "النسخ الاحتياطي المحلي مفعل ($defaultBackupFileName)"
+                                        "آخر نسخ تلقائي: $formattedLastAutoBackup"
                                     } else {
-                                        "Local JSON Backup Active ($defaultBackupFileName)"
+                                        "Last auto-backup: $formattedLastAutoBackup"
                                     },
+                                    fontSize = 12.sp,
+                                    color = DarkTextSecondary,
+                                    modifier = Modifier.testTag("last_auto_backup_subtitle")
+                                )
+                                Text(
+                                    text = "${FocusRepository.BACKUP_DISPLAY_PATH}/${FocusRepository.AUTO_BACKUP_FILE_NAME}",
                                     fontSize = 11.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
                                     color = DarkTextSecondary
                                 )
                             }
@@ -322,9 +359,9 @@ fun SettingsDialog(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            // 1. Export Backup (تصدير نسخة احتياطية)
+                            // 1. Manual Export Button (تصدير نسخة يدوية الآن)
                             Button(
-                                onClick = { triggerShareBackupSheet() },
+                                onClick = { triggerManualExportNow() },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = CoralPrimary,
                                     contentColor = Color.White
@@ -335,47 +372,17 @@ fun SettingsDialog(
                                     .height(46.dp)
                                     .testTag("export_json_button")
                             ) {
-                                Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.SaveAlt, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Export Backup (تصدير نسخة احتياطية)",
+                                    text = if (isArabic) "تصدير نسخة يدوية الآن" else "Export Manual Backup Now",
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1
                                 )
                             }
 
-                            // Direct Save to Device Downloads option
-                            OutlinedButton(
-                                onClick = {
-                                    exportSaveLauncher.launch(FocusRepository.generateBackupFileName())
-                                },
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = DarkSurfaceVariant,
-                                    contentColor = DarkTextPrimary
-                                ),
-                                border = BorderStroke(1.dp, DarkOutline),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(44.dp)
-                                    .testTag("save_backup_file_button")
-                            ) {
-                                Icon(Icons.Default.SaveAlt, null, modifier = Modifier.size(17.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (isArabic) {
-                                        "حفظ ملف النسخة في الجهاز ($defaultBackupFileName)"
-                                    } else {
-                                        "Save Backup File to Device ($defaultBackupFileName)"
-                                    },
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 1
-                                )
-                            }
-
-                            // 2. Import Backup (استيراد نسخة احتياطية)
+                            // 2. Manual Import / Restore Button (استعادة من ملف نسخ احتياطي)
                             OutlinedButton(
                                 onClick = {
                                     importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
@@ -385,7 +392,7 @@ fun SettingsDialog(
                                     containerColor = DarkSurfaceVariant,
                                     contentColor = DarkTextPrimary
                                 ),
-                                border = BorderStroke(1.dp, CoralPrimary.copy(alpha = 0.6f)),
+                                border = BorderStroke(1.dp, CoralPrimary.copy(alpha = 0.65f)),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(46.dp)
@@ -394,10 +401,38 @@ fun SettingsDialog(
                                 Icon(Icons.Default.Upload, null, tint = CoralPrimary, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Import Backup (استيراد نسخة احتياطية)",
+                                    text = if (isArabic) "استعادة من ملف نسخ احتياطي" else "Restore from Backup File",
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = DarkTextPrimary,
+                                    maxLines = 1
+                                )
+                            }
+
+                            // Secondary Share Option (مشاركة النسخة عبر التطبيقات)
+                            OutlinedButton(
+                                onClick = { triggerShareBackupSheet() },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = DarkSurfaceVariant,
+                                    contentColor = DarkTextSecondary
+                                ),
+                                border = BorderStroke(1.dp, DarkOutline),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(42.dp)
+                                    .testTag("share_backup_file_button")
+                            ) {
+                                Icon(Icons.Default.Share, null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (isArabic) {
+                                        "مشاركة ملف النسخة الاحتياطية (Share)"
+                                    } else {
+                                        "Share Backup File"
+                                    },
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
                                     maxLines = 1
                                 )
                             }
@@ -451,7 +486,7 @@ fun SettingsDialog(
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.CheckCircle,
+                                            imageVector = if (backupIsError) Icons.Default.Warning else Icons.Default.CheckCircle,
                                             contentDescription = null,
                                             tint = bannerColor,
                                             modifier = Modifier.size(18.dp)
@@ -764,18 +799,19 @@ fun SettingsDialog(
         }
     }
 
-    // Confirmation Dialog for Import Backup: Merge vs Replace
+    // Confirmation Dialog for Import / Restore Backup
     pendingImportState?.let { importedState ->
         AlertDialog(
             onDismissRequest = { pendingImportState = null },
             shape = RoundedCornerShape(14.dp),
             containerColor = DarkSurface,
+            modifier = Modifier.border(1.dp, CoralPrimary.copy(alpha = 0.65f), RoundedCornerShape(14.dp)),
             title = {
                 Text(
                     text = if (isArabic) {
-                        "استيراد النسخة الاحتياطية (Import Backup)"
+                        "استعادة من ملف نسخ احتياطي"
                     } else {
-                        "Import Backup (استيراد نسخة احتياطية)"
+                        "Restore from Backup File"
                     },
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
@@ -786,24 +822,40 @@ fun SettingsDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
                         text = if (isArabic) {
-                            "يحتوي ملف النسخة الاحتياطية على ${importedState.tasks.size} مهمة، و ${importedState.projects.size} مشروع، و ${importedState.focusRecords.size} سجل تركيز.\nكيف ترغب في استعادة البيانات؟"
+                            "هل أنت متأكد من استعادة هذه النسخة؟ سيتم استبدال البيانات الحالية"
                         } else {
-                            "This backup contains ${importedState.tasks.size} tasks, ${importedState.projects.size} projects, and ${importedState.focusRecords.size} focus records.\nHow would you like to restore the data?"
+                            "Are you sure you want to restore this backup? Current data will be replaced."
                         },
-                        fontSize = 13.sp,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DarkTextPrimary
+                    )
+
+                    Text(
+                        text = if (isArabic) {
+                            "تحتوي النسخة على ${importedState.tasks.size} مهمة، و ${importedState.projects.size} مشروع، و ${importedState.focusRecords.size} سجل تركيز."
+                        } else {
+                            "Contains ${importedState.tasks.size} tasks, ${importedState.projects.size} projects, and ${importedState.focusRecords.size} focus records."
+                        },
+                        fontSize = 12.sp,
                         color = DarkTextSecondary
                     )
 
-                    // Option 1: Merge (دمج مع المهام الحالية)
+                    // Option 1 (Primary): Replace (استبدال البيانات الحالية)
                     Button(
                         onClick = {
-                            onImportBackupState(importedState, BackupImportMode.MERGE)
+                            onImportBackupState(importedState, BackupImportMode.REPLACE)
                             pendingImportState = null
                             backupIsError = false
-                            backupFeedback = if (isArabic) {
-                                "تم دمج النسخة الاحتياطية مع المهام الحالية بنجاح!"
+                            val msg = if (isArabic) {
+                                "تم استعادة النسخة الاحتياطية وتحديث جميع المهام والإحصائيات بنجاح!"
                             } else {
-                                "Backup merged with current tasks successfully!"
+                                "Backup restored and all tasks & statistics refreshed!"
+                            }
+                            backupFeedback = msg
+                            try {
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            } catch (_: Exception) {
                             }
                         },
                         shape = RoundedCornerShape(10.dp),
@@ -814,26 +866,32 @@ fun SettingsDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(46.dp)
-                            .testTag("confirm_import_merge_button")
+                            .testTag("confirm_import_replace_button")
                     ) {
-                        Icon(Icons.Default.MergeType, null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Merge (دمج مع المهام الحالية)",
-                            fontWeight = FontWeight.Bold
+                            text = if (isArabic) "تأكيد الاستعادة (استبدال البيانات الحالية)" else "Confirm Restore (Replace Current Data)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
                         )
                     }
 
-                    // Option 2: Replace (استبدال الكل)
+                    // Option 2: Merge (دمج مع المهام الحالية)
                     OutlinedButton(
                         onClick = {
-                            onImportBackupState(importedState, BackupImportMode.REPLACE)
+                            onImportBackupState(importedState, BackupImportMode.MERGE)
                             pendingImportState = null
                             backupIsError = false
-                            backupFeedback = if (isArabic) {
-                                "تم استبدال البيانات واستعادة النسخة الاحتياطية بنجاح!"
+                            val msg = if (isArabic) {
+                                "تم دمج النسخة الاحتياطية مع المهام الحالية بنجاح!"
                             } else {
-                                "All data replaced from backup successfully!"
+                                "Backup merged with current tasks successfully!"
+                            }
+                            backupFeedback = msg
+                            try {
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            } catch (_: Exception) {
                             }
                         },
                         shape = RoundedCornerShape(10.dp),
@@ -844,14 +902,15 @@ fun SettingsDialog(
                         border = BorderStroke(1.dp, DarkOutline),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(46.dp)
-                            .testTag("confirm_import_replace_button")
+                            .height(44.dp)
+                            .testTag("confirm_import_merge_button")
                     ) {
-                        Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.MergeType, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Replace (استبدال الكل)",
-                            fontWeight = FontWeight.Bold
+                            text = if (isArabic) "دمج مع المهام الحالية (Merge)" else "Merge with Current Tasks",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
                         )
                     }
                 }
@@ -863,6 +922,96 @@ fun SettingsDialog(
                     modifier = Modifier.testTag("cancel_import_dialog_button")
                 ) {
                     Text(s.cancel, color = DarkTextSecondary)
+                }
+            }
+        )
+    }
+
+    // 3x Consecutive Failure Warning Alert Dialog (تحذير هام 1/3 -> 2/3 -> 3/3)
+    if (failureWarningStep in 1..3) {
+        val advanceWarningStep = {
+            if (failureWarningStep < 3) {
+                val nextStep = failureWarningStep + 1
+                failureWarningStep = nextStep
+                FocusNotificationManager.showBackupWarningNotification(
+                    context = context,
+                    step = nextStep,
+                    totalSteps = 3,
+                    errorReason = failureWarningReason
+                )
+            } else {
+                failureWarningStep = 0
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = advanceWarningStep,
+            shape = RoundedCornerShape(14.dp),
+            containerColor = DarkSurface,
+            modifier = Modifier
+                .border(1.5.dp, CoralPrimary, RoundedCornerShape(14.dp))
+                .testTag("manual_export_failure_warning_dialog"),
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(CoralPrimary.copy(alpha = 0.18f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = CoralPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Text(
+                        text = "تحذير هام ($failureWarningStep/3)",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CoralPrimary
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "تعذر حفظ النسخة الاحتياطية اليدوية في مجلد Documents/Focus_Zohayr!",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DarkTextPrimary
+                    )
+                    Text(
+                        text = "يرجى التأكد من توفر مساحة تخزين كافية على الجهاز وصلاحية الكتابة في مجلد المستندات قبل إغلاق التطبيق أو مسح بياناته.\nالسبب: $failureWarningReason",
+                        fontSize = 12.sp,
+                        lineHeight = 19.sp,
+                        color = DarkTextSecondary
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = advanceWarningStep,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CoralPrimary,
+                        contentColor = Color.White
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("acknowledge_failure_warning_button")
+                ) {
+                    Text(
+                        text = "أفهم ذلك / متابعة ($failureWarningStep/3)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
                 }
             }
         )

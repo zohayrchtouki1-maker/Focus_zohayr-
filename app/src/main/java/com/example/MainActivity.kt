@@ -426,6 +426,9 @@ fun FocusTodoAppRoot(
                         onRequestPermissions = { viewModel.requestNativePermissionsIfMissing() },
                         onOpenBackgroundPermissionsModal = { viewModel.setShowBackgroundPermissionsModal(true) },
                         onExportJson = { viewModel.exportBackupJson() },
+                        onExportManualBackupToDocuments = { onResult ->
+                            viewModel.exportManualBackupToDocuments(onResult)
+                        },
                         onCreateShareableBackupFile = { viewModel.createShareableBackupFile() },
                         onParseBackupPreview = { viewModel.parseBackupPreview(it) },
                         onImportBackupState = { parsed, mode -> viewModel.importBackupState(parsed, mode) },

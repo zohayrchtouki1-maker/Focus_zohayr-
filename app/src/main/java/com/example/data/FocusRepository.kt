@@ -1,12 +1,19 @@
 package com.example.data
 
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import com.example.model.AppBackupState
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -21,10 +28,27 @@ class FocusRepository(private val context: Context) {
         private const val LOCAL_STATE_FILE_NAME = "focus_todo_state.json"
         private const val PREFS_NAME = "focus_todo_local_storage"
         private const val PREFS_STATE_KEY = "focus_todo_state_json"
+        const val PREFS_LAST_AUTO_BACKUP_TIME = "last_auto_backup_time"
+
+        const val BACKUP_FOLDER_NAME = "Focus_Zohayr"
+        const val BACKUP_DISPLAY_PATH = "Documents/Focus_Zohayr"
+        const val AUTO_BACKUP_FILE_NAME = "focus_zohayr_auto_backup.json"
 
         fun generateBackupFileName(nowMillis: Long = System.currentTimeMillis()): String {
             val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).format(Date(nowMillis))
             return "focus_zohayr_backup_$dateStr.json"
+        }
+
+        fun generateManualTimestampedBackupFileName(nowMillis: Long = System.currentTimeMillis()): String {
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.ENGLISH).format(Date(nowMillis))
+            return "focus_zohayr_backup_$stamp.json"
+        }
+
+        fun formatBackupTimestamp(epochMillis: Long, isArabic: Boolean = true): String {
+            if (epochMillis <= 0L) {
+                return if (isArabic) "لم يتم النسخ بعد" else "Not backed up yet"
+            }
+            return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ENGLISH).format(Date(epochMillis))
         }
     }
 
@@ -36,6 +60,10 @@ class FocusRepository(private val context: Context) {
 
     private val stateFile: File get() = File(context.filesDir, LOCAL_STATE_FILE_NAME)
     private val prefs get() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    fun getLastAutoBackupTimeMillis(): Long {
+        return prefs.getLong(PREFS_LAST_AUTO_BACKUP_TIME, 0L)
+    }
 
     suspend fun loadState(): AppBackupState = withContext(Dispatchers.IO) {
         val fileState = readStateFromFile(stateFile)
@@ -76,6 +104,181 @@ class FocusRepository(private val context: Context) {
             prefs.edit().putString(PREFS_STATE_KEY, json).apply()
         } catch (_: Exception) {
         }
+        performSilentAutoBackupInternal(json)
+    }
+
+    private fun performSilentAutoBackupInternal(json: String) {
+        try {
+            writeJsonToDocumentsFolder(
+                fileName = AUTO_BACKUP_FILE_NAME,
+                json = json,
+                overwriteExisting = true
+            )
+            val now = System.currentTimeMillis()
+            prefs.edit().putLong(PREFS_LAST_AUTO_BACKUP_TIME, now).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    suspend fun exportManualBackupToDocuments(
+        state: AppBackupState,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Result<String> = withContext(Dispatchers.IO) {
+        return@withContext try {
+            val fileName = generateManualTimestampedBackupFileName(nowMillis)
+            val json = exportJson(state)
+            writeJsonToDocumentsFolder(
+                fileName = fileName,
+                json = json,
+                overwriteExisting = true
+            )
+            val now = System.currentTimeMillis()
+            prefs.edit().putLong(PREFS_LAST_AUTO_BACKUP_TIME, now).apply()
+            Result.success(fileName)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    @Throws(IOException::class)
+    fun writeJsonToDocumentsFolder(
+        fileName: String,
+        json: String,
+        overwriteExisting: Boolean
+    ): Uri {
+        val bytes = json.toByteArray(Charsets.UTF_8)
+        if (bytes.isEmpty()) {
+            throw IOException("Backup JSON payload is empty")
+        }
+
+        val resolver = context.contentResolver
+        val relativePath = "${Environment.DIRECTORY_DOCUMENTS}/$BACKUP_FOLDER_NAME/"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val collectionUri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+
+            if (overwriteExisting) {
+                try {
+                    val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+                    val selectionArgs = arrayOf(fileName, "${Environment.DIRECTORY_DOCUMENTS}/$BACKUP_FOLDER_NAME%")
+                    resolver.query(
+                        collectionUri,
+                        arrayOf(MediaStore.MediaColumns._ID),
+                        selection,
+                        selectionArgs,
+                        null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val id = cursor.getLong(0)
+                            val existingUri = ContentUris.withAppendedId(collectionUri, id)
+                            val wroteExisting = try {
+                                resolver.openOutputStream(existingUri, "wt")?.use { out ->
+                                    out.write(bytes)
+                                    out.flush()
+                                    true
+                                } ?: false
+                            } catch (_: Exception) {
+                                false
+                            }
+                            if (wroteExisting) {
+                                alsoWriteMirrorDocumentsFile(fileName, bytes)
+                                return existingUri
+                            } else {
+                                try {
+                                    resolver.delete(existingUri, null, null)
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+
+            val insertedUri = try {
+                resolver.insert(collectionUri, values)
+            } catch (_: Exception) {
+                null
+            }
+
+            if (insertedUri != null) {
+                var streamWritten = false
+                try {
+                    resolver.openOutputStream(insertedUri)?.use { out ->
+                        out.write(bytes)
+                        out.flush()
+                        streamWritten = true
+                    }
+                } catch (_: Exception) {
+                    streamWritten = false
+                }
+
+                try {
+                    val completeValues = ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    }
+                    resolver.update(insertedUri, completeValues, null, null)
+                } catch (_: Exception) {
+                }
+
+                alsoWriteMirrorDocumentsFile(fileName, bytes)
+                if (streamWritten) {
+                    return insertedUri
+                }
+            }
+        }
+
+        // Direct Documents/Focus_Zohayr fallback (API < 29 or local test environment)
+        val fallbackFile = writeMirrorDocumentsFileOrThrow(fileName, bytes)
+        return Uri.fromFile(fallbackFile)
+    }
+
+    private fun alsoWriteMirrorDocumentsFile(fileName: String, bytes: ByteArray) {
+        try {
+            writeMirrorDocumentsFileOrThrow(fileName, bytes)
+        } catch (_: Exception) {
+        }
+    }
+
+    @Throws(IOException::class)
+    private fun writeMirrorDocumentsFileOrThrow(fileName: String, bytes: ByteArray): File {
+        val publicDocs = try {
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+        } catch (_: Exception) {
+            null
+        }
+        val targetDir = if (publicDocs != null) {
+            File(publicDocs, BACKUP_FOLDER_NAME)
+        } else {
+            File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
+        }
+
+        if (!targetDir.exists() && !targetDir.mkdirs()) {
+            val internalFallbackDir = File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
+            internalFallbackDir.mkdirs()
+            val internalFile = File(internalFallbackDir, fileName)
+            internalFile.writeBytes(bytes)
+            return internalFile
+        }
+
+        return try {
+            val outFile = File(targetDir, fileName)
+            outFile.writeBytes(bytes)
+            outFile
+        } catch (_: Exception) {
+            val internalFallbackDir = File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
+            internalFallbackDir.mkdirs()
+            val internalFile = File(internalFallbackDir, fileName)
+            internalFile.writeBytes(bytes)
+            internalFile
+        }
     }
 
     private fun readStateFromFile(file: File): AppBackupState? {
@@ -106,7 +309,6 @@ class FocusRepository(private val context: Context) {
                 val f = File(userDir, "focus_todo_backup.json")
                 readStateFromFile(f)?.let { states.add(it) }
             }
-            // Remove legacy user dirs after migrating into main local state
             usersDir.deleteRecursively()
             states
         } catch (_: Exception) {
@@ -174,7 +376,15 @@ class FocusRepository(private val context: Context) {
 
     fun parseBackupJson(json: String): AppBackupState? {
         return try {
-            adapter.fromJson(json)?.let { cleanLegacySamples(it) }
+            val trimmed = json.trim()
+            if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
+            // Verify JSON contains valid structural fields before accepting
+            val hasValidStructure = trimmed.contains("\"tasks\"") ||
+                trimmed.contains("\"projects\"") ||
+                trimmed.contains("\"settings\"") ||
+                trimmed.contains("\"focusRecords\"")
+            if (!hasValidStructure) return null
+            adapter.fromJson(trimmed)?.let { cleanLegacySamples(it) }
         } catch (_: Exception) {
             null
         }

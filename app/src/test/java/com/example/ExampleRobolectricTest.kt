@@ -162,6 +162,9 @@ class ExampleRobolectricTest {
         val fileName = FocusRepository.generateBackupFileName()
         assertTrue(fileName.matches(Regex("^focus_zohayr_backup_\\d{4}-\\d{2}-\\d{2}\\.json$")))
 
+        val manualTimestampedName = FocusRepository.generateManualTimestampedBackupFileName()
+        assertTrue(manualTimestampedName.matches(Regex("^focus_zohayr_backup_\\d{8}_\\d{4}\\.json$")))
+
         kotlinx.coroutines.runBlocking {
             val currentState = SeedData.createInitialState().copy(
                 tasks = listOf(
@@ -174,10 +177,15 @@ class ExampleRobolectricTest {
             )
             val saveRes = repo.saveState(currentState)
             assertTrue(saveRes.isSuccess)
+            assertTrue(repo.getLastAutoBackupTimeMillis() > 0L)
 
             val loadedState = repo.loadState()
             assertEquals(1, loadedState.tasks.size)
             assertEquals("existing_task_1", loadedState.tasks.first().id)
+
+            val manualExportRes = repo.exportManualBackupToDocuments(loadedState)
+            assertTrue(manualExportRes.isSuccess)
+            assertTrue(manualExportRes.getOrNull()!!.startsWith("focus_zohayr_backup_"))
 
             val importedState = SeedData.createInitialState().copy(
                 tasks = listOf(
@@ -197,6 +205,10 @@ class ExampleRobolectricTest {
             val shareFile = repo.createShareableBackupFile(merged)
             assertTrue(shareFile.exists())
             assertTrue(shareFile.name.startsWith("focus_zohayr_backup_"))
+
+            // Test JSON validation rejects invalid payload
+            val invalidParsed = repo.parseBackupJson("{\"invalid_key\": 123}")
+            assertEquals(null, invalidParsed)
         }
     }
 }

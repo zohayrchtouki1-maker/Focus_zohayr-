@@ -609,6 +609,41 @@ object FocusNotificationManager {
         }
     }
 
+    fun showBackupWarningNotification(
+        context: Context,
+        step: Int,
+        totalSteps: Int = 3,
+        errorReason: String = ""
+    ) {
+        if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
+        ensureChannelsCreated(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+
+        val title = "⚠️ تحذير هام ($step/$totalSteps): فشل حفظ النسخة الاحتياطية"
+        val body = buildString {
+            append("تعذر حفظ النسخة الاحتياطية اليدوية في مجلد Documents/Focus_Zohayr.")
+            if (errorReason.isNotBlank()) {
+                append(" ($errorReason)")
+            }
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_TASK_ALARMS)
+            .setSmallIcon(R.drawable.ic_notification_timer)
+            .setColor(CORAL_ACCENT_COLOR)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+
+        try {
+            nm.notify(9050 + step, builder.build())
+        } catch (_: SecurityException) {
+        }
+    }
+
     private fun triggerDeviceVibration(context: Context) {
         try {
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
