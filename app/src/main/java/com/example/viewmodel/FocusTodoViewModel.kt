@@ -130,8 +130,11 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             if (restoredTimer.isRunning) {
                 reconcileRunningTimerWithTimestamp()
                 if (_uiState.value.timer.isRunning) {
+                    syncRunningTimerNotificationsAndAlarms()
                     startTimerTicker()
                 }
+            } else if (restoredTimer.hasStarted) {
+                updateOngoingNotificationTick()
             }
         }
 
@@ -140,6 +143,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             FocusNotificationBus.events.collect { event ->
                 when (event) {
                     is ExternalNotificationEvent.PauseTimer -> pauseTimer()
+                    is ExternalNotificationEvent.ResumeTimer -> startOrResumeTimer()
                     is ExternalNotificationEvent.StopTimer -> stopOrAbandonTimer()
                     is ExternalNotificationEvent.TimerCompletedInBackground -> {
                         reconcileRunningTimerWithTimestamp()
@@ -569,7 +573,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         val state = _uiState.value
         val task = state.data.tasks.find { it.id == state.timer.activeTaskId }
         if (task != null) return task.title
-        return if (state.data.settings.language == AppLanguage.AR) "تركيز حر" else "Free Focus"
+        return if (state.data.settings.language == AppLanguage.AR) "جلسة تركيز" else "Focus Session"
     }
 
     fun startFocusForTask(taskId: String?, openFullScreen: Boolean = true) {
@@ -659,8 +663,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         saveCurrentTimerToStorage()
-        FocusNotificationManager.cancelOngoingTimerNotification(appContext)
         FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+        updateOngoingNotificationTick()
         syncWhiteNoise()
     }
 
@@ -804,19 +808,32 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     private fun updateOngoingNotificationTick() {
         val state = _uiState.value
         val t = state.timer
-        if (!t.isRunning) return
+        if (!t.isRunning && !t.hasStarted) return
         val displaySecs = if (t.countMode == TimerCountMode.STOPWATCH && t.phase == TimerPhase.FOCUS) {
             t.stopwatchSeconds
         } else {
             t.remainingSeconds
         }
+        val elapsedSecs = if (t.countMode == TimerCountMode.STOPWATCH && t.phase == TimerPhase.FOCUS) {
+            t.stopwatchSeconds
+        } else {
+            (t.totalPhaseSeconds - t.remainingSeconds).coerceAtLeast(0)
+        }
+        val today = DateUtils.todayEpochDay()
+        val todayCompletedPomodoros = state.data.focusRecords.count {
+            DateUtils.epochDayFromMillis(it.startedAtEpochMillis) == today
+        }
+
         FocusNotificationManager.showOrUpdateOngoingTimerNotification(
             context = appContext,
             taskTitle = activeTaskOrDefaultTitle(),
             phase = t.phase,
             formattedTime = formatSecondsMmSs(displaySecs),
             strictMode = t.strictMode,
-            settings = state.data.settings
+            settings = state.data.settings,
+            elapsedSeconds = elapsedSecs,
+            todayCompletedPomodoros = todayCompletedPomodoros,
+            isRunning = t.isRunning
         )
     }
 

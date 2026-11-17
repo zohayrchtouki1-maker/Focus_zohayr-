@@ -45,6 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.i18n.AppStrings
 import com.example.model.AppLanguage
 import com.example.model.TaskPriority
+import com.example.notifications.FocusNotificationManager
 import com.example.ui.components.BackgroundTimerPermissionsDialog
 import com.example.ui.components.CalendarDialog
 import com.example.ui.components.FloatingMiniTimerBar
@@ -67,6 +68,26 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: FocusTodoViewModel = viewModel()
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+            LaunchedEffect(Unit) {
+                if (intent?.getBooleanExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER, false) == true) {
+                    viewModel.setShowFullScreenTimer(true)
+                    intent?.removeExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER)
+                }
+            }
+
+            DisposableEffect(Unit) {
+                val listener = androidx.core.util.Consumer<android.content.Intent> { newIntent ->
+                    if (newIntent.getBooleanExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER, false)) {
+                        viewModel.setShowFullScreenTimer(true)
+                        newIntent.removeExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER)
+                    }
+                }
+                addOnNewIntentListener(listener)
+                onDispose {
+                    removeOnNewIntentListener(listener)
+                }
+            }
 
             FocusTodoAppRoot(
                 uiState = uiState,

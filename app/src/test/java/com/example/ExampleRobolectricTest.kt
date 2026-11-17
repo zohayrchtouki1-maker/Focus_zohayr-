@@ -81,9 +81,37 @@ class ExampleRobolectricTest {
         FocusNotificationManager.ensureChannelsCreated(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        assertNotNull(nm.getNotificationChannel(FocusNotificationManager.CHANNEL_POMODORO_ONGOING))
+        val ongoingChannel = nm.getNotificationChannel(FocusNotificationManager.CHANNEL_POMODORO_ONGOING)
+        assertNotNull(ongoingChannel)
+        assertEquals(NotificationManager.IMPORTANCE_LOW, ongoingChannel.importance)
         assertNotNull(nm.getNotificationChannel(FocusNotificationManager.CHANNEL_POMODORO_COMPLETE))
         assertNotNull(nm.getNotificationChannel(FocusNotificationManager.CHANNEL_TASK_ALARMS))
+
+        org.robolectric.Shadows.shadowOf(context as android.app.Application)
+            .grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+
+        FocusNotificationManager.showOrUpdateOngoingTimerNotification(
+            context = context,
+            taskTitle = "جلسة تركيز",
+            phase = TimerPhase.FOCUS,
+            formattedTime = "24:51",
+            strictMode = false,
+            settings = SeedData.createInitialState().settings,
+            elapsedSeconds = 9,
+            todayCompletedPomodoros = 2,
+            isRunning = true
+        )
+
+        val shadowNm = org.robolectric.Shadows.shadowOf(nm)
+        val posted = shadowNm.getNotification(FocusNotificationManager.NOTIFICATION_ID_ONGOING_TIMER)
+        assertNotNull(posted)
+        assertEquals(FocusNotificationManager.CORAL_ACCENT_COLOR, posted.color)
+        assertTrue((posted.flags and android.app.Notification.FLAG_ONGOING_EVENT) != 0)
+        assertTrue((posted.flags and android.app.Notification.FLAG_ONLY_ALERT_ONCE) != 0)
+        @Suppress("DEPRECATION")
+        assertNotNull(posted.contentView)
+        @Suppress("DEPRECATION")
+        assertNotNull(posted.bigContentView)
 
         val tomorrow = DateUtils.todayEpochDay() + 1
         val sampleTask = TaskItem(

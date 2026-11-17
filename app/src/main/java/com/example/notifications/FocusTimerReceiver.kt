@@ -17,6 +17,7 @@ class FocusTimerReceiver : BroadcastReceiver() {
 
     companion object {
         const val ACTION_TIMER_PAUSE = "com.example.focustodo.ACTION_TIMER_PAUSE"
+        const val ACTION_TIMER_RESUME = "com.example.focustodo.ACTION_TIMER_RESUME"
         const val ACTION_TIMER_STOP = "com.example.focustodo.ACTION_TIMER_STOP"
         const val ACTION_TIMER_COMPLETE_ALARM = "com.example.focustodo.ACTION_TIMER_COMPLETE_ALARM"
         const val ACTION_TASK_REMINDER_ALARM = "com.example.focustodo.ACTION_TASK_REMINDER_ALARM"
@@ -37,9 +38,12 @@ class FocusTimerReceiver : BroadcastReceiver() {
 
         when (action) {
             ACTION_TIMER_PAUSE -> {
-                FocusNotificationManager.cancelOngoingTimerNotification(appContext)
                 FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
                 FocusNotificationBus.emit(ExternalNotificationEvent.PauseTimer)
+            }
+
+            ACTION_TIMER_RESUME -> {
+                FocusNotificationBus.emit(ExternalNotificationEvent.ResumeTimer)
             }
 
             ACTION_TIMER_STOP -> {

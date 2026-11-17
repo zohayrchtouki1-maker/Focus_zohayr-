@@ -12,6 +12,8 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.view.View
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
@@ -23,9 +25,11 @@ import com.example.model.TimerPhase
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import java.util.Locale
 
 sealed class ExternalNotificationEvent {
     object PauseTimer : ExternalNotificationEvent()
+    object ResumeTimer : ExternalNotificationEvent()
     object StopTimer : ExternalNotificationEvent()
     object TimerCompletedInBackground : ExternalNotificationEvent()
     data class CompleteTaskFromNotification(val taskId: String) : ExternalNotificationEvent()
@@ -49,6 +53,8 @@ object FocusNotificationManager {
 
     const val NOTIFICATION_ID_ONGOING_TIMER = 9001
     const val NOTIFICATION_ID_TIMER_COMPLETE = 9002
+    const val EXTRA_OPEN_FULLSCREEN_TIMER = "extra_open_fullscreen_timer"
+    const val CORAL_ACCENT_COLOR = 0xFFE05246.toInt()
     private const val REQUEST_CODE_TIMER_COMPLETE = 9100
 
     fun ensureChannelsCreated(context: Context) {
@@ -62,16 +68,17 @@ object FocusNotificationManager {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
 
-        // 1. Silent Ongoing Channel (importance 3 / DEFAULT with null sound)
+        // 1. Silent Ongoing Channel (IMPORTANCE_LOW with null sound and no vibration)
         val ongoingChannel = NotificationChannel(
             CHANNEL_POMODORO_ONGOING,
             "Pomodoro Ongoing Timer / المؤقت المستمر",
-            NotificationManager.IMPORTANCE_DEFAULT
+            NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Persistent countdown display while Pomodoro timer runs"
+            description = "Persistent silent countdown display while Pomodoro timer runs"
             setSound(null, null)
             enableVibration(false)
             setShowBadge(false)
+            lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
         }
 
         // 2. High-Priority Pomodoro Completion Channel (importance 5 / HIGH)
@@ -135,7 +142,10 @@ object FocusNotificationManager {
         phase: TimerPhase,
         formattedTime: String,
         strictMode: Boolean,
-        settings: AppSettings
+        settings: AppSettings,
+        elapsedSeconds: Int = 0,
+        todayCompletedPomodoros: Int = 0,
+        isRunning: Boolean = true
     ) {
         if (!settings.persistentTimerNotification) {
             cancelOngoingTimerNotification(context)
@@ -147,14 +157,35 @@ object FocusNotificationManager {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
 
         val isArabic = settings.language == AppLanguage.AR
-        val phaseLabel = when (phase) {
+        val basePhaseLabel = when (phase) {
             TimerPhase.FOCUS -> if (isArabic) "جلسة تركيز" else "Focus Session"
             TimerPhase.SHORT_BREAK -> if (isArabic) "استراحة قصيرة" else "Short Break"
             TimerPhase.LONG_BREAK -> if (isArabic) "استراحة طويلة" else "Long Break"
         }
+        val phaseLabel = if (isRunning) {
+            basePhaseLabel
+        } else {
+            if (isArabic) "$basePhaseLabel (متوقف مؤقتًا)" else "$basePhaseLabel (Paused)"
+        }
+
+        val resolvedTaskTitle = taskTitle.trim().ifEmpty {
+            if (isArabic) "جلسة تركيز" else "Focus Session"
+        }
+        val safeElapsed = elapsedSeconds.coerceAtLeast(0)
+        val formattedElapsed = String.format(
+            Locale.US,
+            "%02d:%02d",
+            safeElapsed / 60,
+            safeElapsed % 60
+        )
+        val elapsedSegment = if (isArabic) "مضى: $formattedElapsed" else "Elapsed: $formattedElapsed"
+        val pomodoroSegment = "🍅 ${todayCompletedPomodoros.coerceAtLeast(0)}"
+        val secondaryDetailsText = "$resolvedTaskTitle • $elapsedSegment • $pomodoroSegment"
+        val expandedDetailsText = "$elapsedSegment • $pomodoroSegment"
 
         val openAppIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_OPEN_FULLSCREEN_TIMER, true)
         }
         val contentPendingIntent = PendingIntent.getActivity(
             context,
@@ -163,13 +194,17 @@ object FocusNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val pauseIntent = Intent(context, FocusTimerReceiver::class.java).apply {
-            action = FocusTimerReceiver.ACTION_TIMER_PAUSE
+        val pauseOrResumeIntent = Intent(context, FocusTimerReceiver::class.java).apply {
+            action = if (isRunning) {
+                FocusTimerReceiver.ACTION_TIMER_PAUSE
+            } else {
+                FocusTimerReceiver.ACTION_TIMER_RESUME
+            }
         }
-        val pausePending = PendingIntent.getBroadcast(
+        val pauseOrResumePending = PendingIntent.getBroadcast(
             context,
-            9011,
-            pauseIntent,
+            if (isRunning) 9011 else 9013,
+            pauseOrResumeIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -183,29 +218,55 @@ object FocusNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val pauseResumeLabel = if (isRunning) {
+            if (isArabic) "إيقاف مؤقت" else "Pause"
+        } else {
+            if (isArabic) "استئناف" else "Resume"
+        }
+        val stopLabel = if (isArabic) "إنهاء" else "Stop"
+        val canPauseOrResume = !(strictMode && phase == TimerPhase.FOCUS && isRunning)
+
+        val collapsedView = RemoteViews(context.packageName, R.layout.notification_pomodoro_collapsed).apply {
+            setTextViewText(R.id.notif_remaining_time, formattedTime)
+            setTextViewText(R.id.notif_phase_badge, phaseLabel)
+            setTextViewText(R.id.notif_secondary_details, secondaryDetailsText)
+            setTextViewText(R.id.notif_btn_pause_resume, pauseResumeLabel)
+            setTextViewText(R.id.notif_btn_stop, stopLabel)
+            setViewVisibility(R.id.notif_btn_pause_resume, if (canPauseOrResume) View.VISIBLE else View.GONE)
+            setOnClickPendingIntent(R.id.notif_btn_pause_resume, pauseOrResumePending)
+            setOnClickPendingIntent(R.id.notif_btn_stop, stopPending)
+        }
+
+        val expandedView = RemoteViews(context.packageName, R.layout.notification_pomodoro_expanded).apply {
+            setTextViewText(R.id.notif_remaining_time, formattedTime)
+            setTextViewText(R.id.notif_phase_badge, phaseLabel)
+            setTextViewText(R.id.notif_task_title, resolvedTaskTitle)
+            setTextViewText(R.id.notif_secondary_details, expandedDetailsText)
+            setTextViewText(R.id.notif_btn_pause_resume, pauseResumeLabel)
+            setTextViewText(R.id.notif_btn_stop, stopLabel)
+            setViewVisibility(R.id.notif_btn_pause_resume, if (canPauseOrResume) View.VISIBLE else View.GONE)
+            setOnClickPendingIntent(R.id.notif_btn_pause_resume, pauseOrResumePending)
+            setOnClickPendingIntent(R.id.notif_btn_stop, stopPending)
+        }
+
         val builder = NotificationCompat.Builder(context, CHANNEL_POMODORO_ONGOING)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification_timer)
+            .setColor(CORAL_ACCENT_COLOR)
+            .setColorized(true)
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+            .setCustomContentView(collapsedView)
+            .setCustomBigContentView(expandedView)
             .setContentTitle("$phaseLabel • $formattedTime")
-            .setContentText(taskTitle)
+            .setContentText(secondaryDetailsText)
+            .setSubText(pomodoroSegment)
             .setOngoing(true)
             .setAutoCancel(false)
             .setOnlyAlertOnce(true)
             .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(contentPendingIntent)
-
-        if (!(strictMode && phase == TimerPhase.FOCUS)) {
-            builder.addAction(
-                0,
-                if (isArabic) "إيقاف مؤقت / Pause" else "Pause / إيقاف مؤقت",
-                pausePending
-            )
-        }
-        builder.addAction(
-            0,
-            if (isArabic) "إنهاء / Stop" else "Stop / إنهاء",
-            stopPending
-        )
 
         try {
             nm.notify(NOTIFICATION_ID_ONGOING_TIMER, builder.build())
