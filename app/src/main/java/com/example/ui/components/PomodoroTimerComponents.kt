@@ -132,6 +132,8 @@ fun FloatingMiniTimerBar(
         else -> Color(0xFF4B5568)
     }
 
+    val timerBadgeCount = uiState.unreadBadges.pomodoroUnread + uiState.unreadBadges.blockerUnread
+
     // Bottom center: Floating circular Pomodoro timer widget (56dp) with dark night-sky gradient,
     // subtle rim glow, and crisp white countdown number (tapping opens full-screen timer).
     Box(
@@ -143,18 +145,22 @@ fun FloatingMiniTimerBar(
     ) {
         Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(62.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(
-                            rimColor.copy(alpha = 0.32f),
-                            Color.Transparent
+            modifier = Modifier.size(62.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                rimColor.copy(alpha = 0.32f),
+                                Color.Transparent
+                            )
                         )
                     )
-                )
-        ) {
+            )
+
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
@@ -210,6 +216,19 @@ fun FloatingMiniTimerBar(
                     fontSize = if (circleDisplayText.length > 2) 13.sp else 19.sp,
                     color = Color.White,
                     maxLines = 1
+                )
+            }
+
+            if (timerBadgeCount > 0) {
+                WhatsAppUnreadBadge(
+                    count = timerBadgeCount,
+                    minSize = 19.dp,
+                    fontSize = 10.sp,
+                    borderColor = Color(0xFF0D0E15),
+                    testTag = "badge_mini_timer",
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 2.dp, y = (-2).dp)
                 )
             }
 
@@ -406,36 +425,48 @@ fun FullScreenTimerOverlay(
                 // Shield Icon Button: 🛡️ الحظر الصارم
                 val blockerReady = uiState.strictBlockerPermissions.isFullyReady &&
                     (timer.strictMode || settings.strictBlockerEnabled)
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (blockerReady) ForestEmerald.copy(alpha = 0.2f) else Color(0xFF1C1C21),
-                    border = BorderStroke(
-                        1.dp,
-                        if (blockerReady) ForestEmerald.copy(alpha = 0.7f) else CoralPrimary.copy(alpha = 0.65f)
-                    ),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .clickable { onOpenStrictBlockerSetup() }
-                        .testTag("open_strict_blocker_button")
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                Box {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (blockerReady) ForestEmerald.copy(alpha = 0.2f) else Color(0xFF1C1C21),
+                        border = BorderStroke(
+                            1.dp,
+                            if (blockerReady) ForestEmerald.copy(alpha = 0.7f) else CoralPrimary.copy(alpha = 0.65f)
+                        ),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable { onOpenStrictBlockerSetup() }
+                            .testTag("open_strict_blocker_button")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = "🛡️ الحظر الصارم",
-                            tint = if (blockerReady) ForestEmerald else CoralPrimary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "🛡️ الحظر الصارم",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = "🛡️ الحظر الصارم",
+                                tint = if (blockerReady) ForestEmerald else CoralPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "🛡️ الحظر الصارم",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
                     }
+                    WhatsAppUnreadBadge(
+                        count = uiState.unreadBadges.blockerUnread,
+                        minSize = 18.dp,
+                        fontSize = 10.sp,
+                        borderColor = Color(0xFF0E0E12),
+                        testTag = "badge_strict_blocker",
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = 4.dp, y = (-5).dp)
+                    )
                 }
             }
 

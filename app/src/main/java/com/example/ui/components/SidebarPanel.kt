@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -73,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.DateUtils
 import com.example.i18n.Strings
 import com.example.i18n.label
 import com.example.model.AppLanguage
@@ -137,6 +139,8 @@ fun SidebarPanel(
 
     val scrollState = rememberScrollState()
     val data = uiState.data
+    val badges = uiState.unreadBadges
+    val today = remember(data.tasks) { DateUtils.todayEpochDay() }
     val isArabic = data.settings.language == AppLanguage.AR
     val primaryTextColor = if (data.settings.darkTheme) DarkTextPrimary else MaterialTheme.colorScheme.onBackground
     val secondaryTextColor = if (data.settings.darkTheme) DarkTextSecondary else MaterialTheme.colorScheme.onSurfaceVariant
@@ -230,43 +234,76 @@ fun SidebarPanel(
                         )
                     }
                 }
-                IconButton(
-                    onClick = onOpenReports,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .testTag("nav_reports_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.BarChart,
-                        contentDescription = s.reports,
-                        tint = topIconTint,
-                        modifier = Modifier.size(22.dp)
+                Box {
+                    IconButton(
+                        onClick = onOpenReports,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("nav_reports_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.BarChart,
+                            contentDescription = s.reports,
+                            tint = topIconTint,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    WhatsAppUnreadBadge(
+                        count = badges.reportsUnread,
+                        minSize = 17.dp,
+                        fontSize = 9.sp,
+                        testTag = "badge_reports",
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = (-1).dp, y = 1.dp)
                     )
                 }
-                IconButton(
-                    onClick = onOpenForest,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .testTag("nav_forest_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Park,
-                        contentDescription = s.forest,
-                        tint = topIconTint,
-                        modifier = Modifier.size(22.dp)
+                Box {
+                    IconButton(
+                        onClick = onOpenForest,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("nav_forest_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Park,
+                            contentDescription = s.forest,
+                            tint = topIconTint,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    WhatsAppUnreadBadge(
+                        count = badges.forestUnread,
+                        minSize = 17.dp,
+                        fontSize = 9.sp,
+                        testTag = "badge_forest",
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = (-1).dp, y = 1.dp)
                     )
                 }
-                IconButton(
-                    onClick = onOpenSettings,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .testTag("nav_settings_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Settings,
-                        contentDescription = s.settings,
-                        tint = topIconTint,
-                        modifier = Modifier.size(22.dp)
+                Box {
+                    IconButton(
+                        onClick = onOpenSettings,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("nav_settings_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = s.settings,
+                            tint = topIconTint,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    WhatsAppUnreadBadge(
+                        count = badges.settingsBackupUnread,
+                        minSize = 17.dp,
+                        fontSize = 9.sp,
+                        testTag = "badge_settings_backup",
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = (-1).dp, y = 1.dp)
                     )
                 }
             }
@@ -284,12 +321,31 @@ fun SidebarPanel(
             )
             val (icon, iconTint) = smartListVisual(smartType)
             val formattedMetric = formatHomeRowSummary(estMins, count, isArabic)
+            val matchingUnread = if (smartType == SmartListType.COMPLETED) {
+                0
+            } else {
+                data.tasks.count { task ->
+                    !task.isCompleted &&
+                        badges.unreadTaskIds.contains(task.id) &&
+                        TaskFilterUtils.matchesSmartList(task, smartType, today)
+                }
+            }
+            val rowUnreadCount = when (smartType) {
+                SmartListType.INBOX -> badges.tasksUnread
+                SmartListType.TODAY -> if (badges.unreadTaskIds.isEmpty()) {
+                    badges.tasksUnread
+                } else {
+                    maxOf(matchingUnread, if (matchingUnread == badges.unreadTaskIds.size) badges.tasksUnread else matchingUnread)
+                }
+                else -> matchingUnread
+            }
 
             SidebarNavRow(
                 title = smartType.label(s),
                 icon = icon,
                 iconTint = iconTint,
                 summaryText = formattedMetric,
+                unreadCount = rowUnreadCount,
                 selected = isSelected,
                 primaryTextColor = primaryTextColor,
                 secondaryTextColor = secondaryTextColor,
@@ -387,9 +443,11 @@ fun SidebarPanel(
                             val rem = (it.estimatedPomodoros - it.completedPomodoros).coerceAtLeast(0)
                             rem * (it.customPomodoroMinutes ?: data.settings.pomodoroMinutes)
                         }
+                        val projUnread = activeTasksForProj.count { it.id in badges.unreadTaskIds }
                         ProjectSidebarRow(
                             project = project,
                             summaryText = formatHomeRowSummary(projMins, activeTasksForProj.size, isArabic),
+                            unreadCount = projUnread,
                             selected = uiState.destination == NavDestination.Project(project.id),
                             primaryTextColor = primaryTextColor,
                             secondaryTextColor = secondaryTextColor,
@@ -415,9 +473,11 @@ fun SidebarPanel(
                 val rem = (it.estimatedPomodoros - it.completedPomodoros).coerceAtLeast(0)
                 rem * (it.customPomodoroMinutes ?: data.settings.pomodoroMinutes)
             }
+            val projUnread = activeTasksForProj.count { it.id in badges.unreadTaskIds }
             ProjectSidebarRow(
                 project = project,
                 summaryText = formatHomeRowSummary(projMins, activeTasksForProj.size, isArabic),
+                unreadCount = projUnread,
                 selected = uiState.destination == NavDestination.Project(project.id),
                 primaryTextColor = primaryTextColor,
                 secondaryTextColor = secondaryTextColor,
@@ -444,6 +504,9 @@ fun SidebarPanel(
                     val isSelected = uiState.destination == NavDestination.Tag(tag.id)
                     val tagColor = parseHexColor(tag.colorHex)
                     val count = data.tasks.count { !it.isCompleted && it.tagIds.contains(tag.id) }
+                    val tagUnread = data.tasks.count {
+                        !it.isCompleted && it.tagIds.contains(tag.id) && it.id in badges.unreadTaskIds
+                    }
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = if (isSelected) tagColor.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surface,
@@ -468,6 +531,15 @@ fun SidebarPanel(
                                     text = count.toString(),
                                     fontSize = 11.sp,
                                     color = secondaryTextColor
+                                )
+                            }
+                            if (tagUnread > 0) {
+                                Spacer(modifier = Modifier.width(5.dp))
+                                WhatsAppUnreadBadge(
+                                    count = tagUnread,
+                                    minSize = 16.dp,
+                                    fontSize = 9.sp,
+                                    borderColor = MaterialTheme.colorScheme.surface
                                 )
                             }
                             Spacer(modifier = Modifier.width(4.dp))
@@ -681,6 +753,7 @@ private fun SidebarNavRow(
     icon: ImageVector,
     iconTint: Color,
     summaryText: String,
+    unreadCount: Int = 0,
     selected: Boolean,
     primaryTextColor: Color,
     secondaryTextColor: Color,
@@ -713,6 +786,14 @@ private fun SidebarNavRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        if (unreadCount > 0) {
+            WhatsAppUnreadBadge(
+                count = unreadCount,
+                minSize = 19.dp,
+                fontSize = 10.sp
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+        }
         Text(
             text = summaryText,
             fontSize = 12.sp,
@@ -726,6 +807,7 @@ private fun SidebarNavRow(
 private fun ProjectSidebarRow(
     project: ProjectItem,
     summaryText: String,
+    unreadCount: Int = 0,
     selected: Boolean,
     primaryTextColor: Color,
     secondaryTextColor: Color,
@@ -764,6 +846,14 @@ private fun ProjectSidebarRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        if (unreadCount > 0) {
+            WhatsAppUnreadBadge(
+                count = unreadCount,
+                minSize = 18.dp,
+                fontSize = 10.sp
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+        }
         Text(
             text = summaryText,
             fontSize = 12.sp,

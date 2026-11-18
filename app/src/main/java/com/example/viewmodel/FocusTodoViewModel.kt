@@ -40,6 +40,10 @@ import com.example.notifications.FocusNotificationBus
 import com.example.notifications.FocusNotificationManager
 import com.example.notifications.SystemPermissionSnapshot
 import com.example.notifications.SystemPermissionsHelper
+import com.example.notifications.UnreadBadgeTracker
+import com.example.notifications.UnreadBadgesState
+import com.example.notifications.UnreadSection
+import com.example.ui.components.TaskFilterUtils
 import com.example.ui.components.formatSecondsMmSs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -101,7 +105,8 @@ data class MainUiState(
     val strictBlockerPermissions: StrictBlockerPermissionStatus = StrictBlockerPermissionStatus(),
     val permissionRequestTrigger: Int = 0,
     val statusBannerMessage: String? = null,
-    val lastAutoBackupTimeMillis: Long = 0L
+    val lastAutoBackupTimeMillis: Long = 0L,
+    val unreadBadges: UnreadBadgesState = UnreadBadgesState()
 )
 
 class FocusTodoViewModel(application: Application) : AndroidViewModel(application), TomatoToolExecutor {
@@ -116,6 +121,13 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         FocusNotificationManager.ensureChannelsCreated(appContext)
+        UnreadBadgeTracker.ensureInitialized(appContext)
+
+        viewModelScope.launch {
+            UnreadBadgeTracker.state.collect { badges ->
+                _uiState.update { it.copy(unreadBadges = badges) }
+            }
+        }
 
         viewModelScope.launch {
             val rawLoaded = repository.loadState()
@@ -148,6 +160,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             }
             syncStrictBlockerTimerState()
+            checkAndRecordOverdueTasks(loaded.tasks)
 
             // Re-verify and schedule all upcoming task reminder alarms on app startup
             FocusNotificationManager.syncAllTaskReminders(
@@ -313,6 +326,62 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun onAppResumed() {
         refreshSystemPermissions()
         reconcileRunningTimerWithTimestamp()
+        checkAndRecordOverdueTasks(_uiState.value.data.tasks)
+    }
+
+    private fun checkAndRecordOverdueTasks(tasks: List<TaskItem>) {
+        val today = DateUtils.todayEpochDay()
+        val now = System.currentTimeMillis()
+        val overdueIds = tasks.filter { task ->
+            if (task.isCompleted) return@filter false
+            val day = task.dueDateEpochDay ?: return@filter false
+            if (day < today) return@filter true
+            if (day == today && !task.reminderTime.isNullOrBlank()) {
+                val reminderMillis = FocusNotificationManager.computeTaskReminderEpochMillis(task)
+                if (reminderMillis != null && reminderMillis <= now) return@filter true
+            }
+            false
+        }.map { it.id }.toSet()
+        UnreadBadgeTracker.recordOverdueTasks(appContext, overdueIds)
+    }
+
+    private fun clearUnreadTasksForDestination(dest: NavDestination) {
+        val state = _uiState.value
+        val (active, completed) = TaskFilterUtils.filterTasks(state.data.tasks, dest, state.sortOption)
+        val matchingIds = (active + completed).map { it.id }.toSet()
+        val isInbox = dest is NavDestination.SmartList && dest.type == SmartListType.INBOX
+        UnreadBadgeTracker.clearTasksForDestination(
+            context = appContext,
+            matchingTaskIds = matchingIds,
+            clearAllIfPrimary = isInbox
+        )
+    }
+
+    fun handleNotificationSectionIntent(sectionName: String?) {
+        val section = sectionName?.let {
+            runCatching { UnreadSection.valueOf(it) }.getOrNull()
+        } ?: return
+        when (section) {
+            UnreadSection.TASKS -> {
+                selectDestination(NavDestination.SmartList(SmartListType.TODAY))
+            }
+            UnreadSection.POMODORO -> {
+                setShowFullScreenTimer(true)
+            }
+            UnreadSection.REPORTS -> {
+                setShowReports(true)
+            }
+            UnreadSection.FOREST -> {
+                setShowForest(true)
+            }
+            UnreadSection.SETTINGS_BACKUP -> {
+                setShowSettings(true)
+            }
+            UnreadSection.BLOCKER -> {
+                setShowFullScreenTimer(true)
+                setShowStrictBlockerSetup(true)
+            }
+        }
     }
 
     fun selectDestination(dest: NavDestination) {
@@ -323,14 +392,21 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 showHomeScreenOnCompact = false
             )
         }
+        clearUnreadTasksForDestination(dest)
     }
 
     fun setShowHomeScreenOnCompact(show: Boolean) {
         _uiState.update { it.copy(showHomeScreenOnCompact = show, selectedTaskId = null) }
+        if (!show) {
+            clearUnreadTasksForDestination(_uiState.value.destination)
+        }
     }
 
     fun setShowCalendar(show: Boolean) {
         _uiState.update { it.copy(showCalendar = show) }
+        if (show) {
+            clearUnreadTasksForDestination(NavDestination.SmartList(SmartListType.EVENTS))
+        }
     }
 
     fun setSortOption(option: TaskSortOption) {
@@ -342,23 +418,38 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun openTaskInspector(taskId: String?) {
+        if (taskId != null) {
+            UnreadBadgeTracker.clearTask(appContext, taskId)
+        }
         _uiState.update { it.copy(selectedTaskId = taskId) }
     }
 
     fun setShowFullScreenTimer(show: Boolean) {
+        if (show) {
+            UnreadBadgeTracker.clearSection(appContext, UnreadSection.POMODORO)
+        }
         _uiState.update { it.copy(showFullScreenTimer = show) }
     }
 
     fun setShowReports(show: Boolean) {
+        if (show) {
+            UnreadBadgeTracker.clearSection(appContext, UnreadSection.REPORTS)
+        }
         _uiState.update { it.copy(showReports = show) }
     }
 
     fun setShowForest(show: Boolean) {
+        if (show) {
+            UnreadBadgeTracker.clearSection(appContext, UnreadSection.FOREST)
+        }
         _uiState.update { it.copy(showForest = show) }
     }
 
     fun setShowSettings(show: Boolean) {
-        if (show) refreshSystemPermissions()
+        if (show) {
+            refreshSystemPermissions()
+            UnreadBadgeTracker.clearSection(appContext, UnreadSection.SETTINGS_BACKUP)
+        }
         _uiState.update { it.copy(showSettings = show) }
     }
 
@@ -368,7 +459,10 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun setShowStrictBlockerSetup(show: Boolean) {
-        if (show) refreshStrictBlockerPermissions()
+        if (show) {
+            refreshStrictBlockerPermissions()
+            UnreadBadgeTracker.clearSection(appContext, UnreadSection.BLOCKER)
+        }
         _uiState.update { it.copy(showStrictBlockerSetup = show) }
     }
 
@@ -498,6 +592,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         val settings = _uiState.value.data.settings
         if (newCompleted) {
             FocusNotificationManager.cancelTaskReminder(appContext, taskId)
+            UnreadBadgeTracker.clearTask(appContext, taskId)
             newlyCreatedRecurringTask?.let {
                 FocusNotificationManager.scheduleTaskReminder(appContext, it, settings)
             }
@@ -531,6 +626,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun deleteTask(taskId: String) {
         FocusNotificationManager.cancelTaskReminder(appContext, taskId)
+        UnreadBadgeTracker.clearTask(appContext, taskId)
         commitData { data ->
             data.copy(tasks = data.tasks.filterNot { it.id == taskId })
         }
@@ -1167,6 +1263,11 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 forestState = updatedForest
             )
         }
+        UnreadBadgeTracker.recordStatsAndForestActivity(
+            context = appContext,
+            recordReports = true,
+            recordForest = durationMinutes >= 5
+        )
     }
 
     fun addManualFocusRecord(
@@ -1210,6 +1311,11 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 forestState = updatedForest
             )
         }
+        UnreadBadgeTracker.recordStatsAndForestActivity(
+            context = appContext,
+            recordReports = true,
+            recordForest = false
+        )
     }
 
     // --- White Noise ---
@@ -1417,6 +1523,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         timerJob?.cancel()
         FocusNotificationManager.cancelOngoingTimerNotification(appContext)
         FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
+        UnreadBadgeTracker.resetAll(appContext)
 
         val demo = SeedData.createInitialState()
         val secs = demo.settings.pomodoroMinutes * 60

@@ -103,7 +103,7 @@ class FocusRepository(private val context: Context) {
 
             val normalized = normalizeLoadedState(resolved)
             latestKnownState = normalized
-            saveStateInternal(normalized)
+            saveStateInternal(normalized, notifyAutoBackup = false)
             normalized
         }
     }
@@ -113,7 +113,7 @@ class FocusRepository(private val context: Context) {
             return@withContext try {
                 val normalized = normalizeLoadedState(state)
                 latestKnownState = normalized
-                saveStateInternal(normalized)
+                saveStateInternal(normalized, notifyAutoBackup = true)
                 Result.success(Unit)
             } catch (e: Exception) {
                 Result.failure(e)
@@ -121,7 +121,7 @@ class FocusRepository(private val context: Context) {
         }
     }
 
-    private fun saveStateInternal(state: AppBackupState) {
+    private fun saveStateInternal(state: AppBackupState, notifyAutoBackup: Boolean = true) {
         syncSettingsToExplicitPreferences(state.settings)
         val enriched = enrichStateForFullExport(state)
         val json = adapter.toJson(enriched)
@@ -143,10 +143,14 @@ class FocusRepository(private val context: Context) {
             prefs.edit().putString(PREFS_STATE_KEY, json).commit()
         } catch (_: Exception) {
         }
-        performSilentAutoBackupInternal(json, enriched)
+        performSilentAutoBackupInternal(json, enriched, notifyUser = notifyAutoBackup)
     }
 
-    private fun performSilentAutoBackupInternal(json: String, enriched: AppBackupState? = null) {
+    private fun performSilentAutoBackupInternal(
+        json: String,
+        enriched: AppBackupState? = null,
+        notifyUser: Boolean = true
+    ) {
         try {
             val now = System.currentTimeMillis()
             prefs.edit().putLong(PREFS_LAST_AUTO_BACKUP_TIME, now).commit()
@@ -157,19 +161,21 @@ class FocusRepository(private val context: Context) {
             )
             removeLegacyAutoBackupFileIfPresent()
 
-            val bytesSize = json.toByteArray(Charsets.UTF_8).size.toLong()
-            val summary = ManualBackupExportSummary(
-                fileName = MASTER_BACKUP_FILE_NAME,
-                fileSizeBytes = bytesSize,
-                formattedFileSize = formatFileSize(bytesSize),
-                projectsCount = enriched?.projects?.size ?: 0,
-                tasksCount = enriched?.tasks?.size ?: 0,
-                subtasksCount = enriched?.subtasks?.size ?: 0,
-                pomodoroSessionsCount = enriched?.pomodoroSessions?.size ?: 0,
-                totalPrefsCount = enriched?.allPreferences?.values?.sumOf { it.size } ?: 0,
-                updatedTimestamp = formatBackupTimestamp(now, true)
-            )
-            FocusNotificationManager.showAutoBackupSuccessNotification(context, summary)
+            if (notifyUser) {
+                val bytesSize = json.toByteArray(Charsets.UTF_8).size.toLong()
+                val summary = ManualBackupExportSummary(
+                    fileName = MASTER_BACKUP_FILE_NAME,
+                    fileSizeBytes = bytesSize,
+                    formattedFileSize = formatFileSize(bytesSize),
+                    projectsCount = enriched?.projects?.size ?: 0,
+                    tasksCount = enriched?.tasks?.size ?: 0,
+                    subtasksCount = enriched?.subtasks?.size ?: 0,
+                    pomodoroSessionsCount = enriched?.pomodoroSessions?.size ?: 0,
+                    totalPrefsCount = enriched?.allPreferences?.values?.sumOf { it.size } ?: 0,
+                    updatedTimestamp = formatBackupTimestamp(now, true)
+                )
+                FocusNotificationManager.showAutoBackupSuccessNotification(context, summary)
+            }
         } catch (_: Exception) {
         }
     }

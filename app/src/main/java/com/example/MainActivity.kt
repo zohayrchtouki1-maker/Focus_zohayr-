@@ -81,6 +81,10 @@ class MainActivity : ComponentActivity() {
                     viewModel.setShowFullScreenTimer(true)
                     intent?.removeExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER)
                 }
+                intent?.getStringExtra(FocusNotificationManager.EXTRA_OPEN_SECTION)?.let { section ->
+                    viewModel.handleNotificationSectionIntent(section)
+                    intent?.removeExtra(FocusNotificationManager.EXTRA_OPEN_SECTION)
+                }
             }
 
             DisposableEffect(Unit) {
@@ -92,6 +96,10 @@ class MainActivity : ComponentActivity() {
                     if (newIntent.getBooleanExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER, false)) {
                         viewModel.setShowFullScreenTimer(true)
                         newIntent.removeExtra(FocusNotificationManager.EXTRA_OPEN_FULLSCREEN_TIMER)
+                    }
+                    newIntent.getStringExtra(FocusNotificationManager.EXTRA_OPEN_SECTION)?.let { section ->
+                        viewModel.handleNotificationSectionIntent(section)
+                        newIntent.removeExtra(FocusNotificationManager.EXTRA_OPEN_SECTION)
                     }
                 }
                 addOnNewIntentListener(listener)

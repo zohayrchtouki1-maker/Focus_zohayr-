@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -244,17 +245,39 @@ fun MainTaskWorkspace(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (isCompact) {
-                IconButton(
-                    onClick = onOpenDrawer,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .testTag("open_drawer_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                        contentDescription = "Back",
-                        tint = primaryTextColor,
-                        modifier = Modifier.size(26.dp)
+                val badges = uiState.unreadBadges
+                val otherUnreadTasks = badges.unreadTaskIds.count { id ->
+                    activeTasks.none { it.id == id } && completedTasks.none { it.id == id }
+                }
+                val backUnreadCount = badges.pomodoroUnread +
+                    badges.reportsUnread +
+                    badges.forestUnread +
+                    badges.settingsBackupUnread +
+                    badges.blockerUnread +
+                    otherUnreadTasks
+
+                Box {
+                    IconButton(
+                        onClick = onOpenDrawer,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("open_drawer_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = "Back",
+                            tint = primaryTextColor,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                    WhatsAppUnreadBadge(
+                        count = backUnreadCount,
+                        minSize = 17.dp,
+                        fontSize = 9.sp,
+                        testTag = "badge_drawer_back",
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = (-1).dp, y = 1.dp)
                     )
                 }
             } else {
@@ -668,6 +691,7 @@ fun MainTaskWorkspace(
                     tags = uiState.data.tags.filter { task.tagIds.contains(it.id) },
                     isSelectedForInspect = uiState.selectedTaskId == task.id,
                     isActiveFocusTask = uiState.timer.activeTaskId == task.id && uiState.timer.isRunning,
+                    hasUnreadAlert = uiState.unreadBadges.unreadTaskIds.contains(task.id),
                     isArabic = isArabic,
                     isDark = isDark,
                     s = s,
@@ -761,6 +785,7 @@ fun MainTaskWorkspace(
                         tags = uiState.data.tags.filter { task.tagIds.contains(it.id) },
                         isSelectedForInspect = uiState.selectedTaskId == task.id,
                         isActiveFocusTask = false,
+                        hasUnreadAlert = false,
                         isArabic = isArabic,
                         isDark = isDark,
                         s = s,
@@ -860,6 +885,7 @@ fun TaskRowCard(
     tags: List<TagItem>,
     isSelectedForInspect: Boolean,
     isActiveFocusTask: Boolean,
+    hasUnreadAlert: Boolean = false,
     isArabic: Boolean,
     isDark: Boolean = true,
     s: Strings,
@@ -956,6 +982,15 @@ fun TaskRowCard(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
+                    if (hasUnreadAlert) {
+                        WhatsAppUnreadBadge(
+                            count = 1,
+                            minSize = 18.dp,
+                            fontSize = 10.sp,
+                            borderColor = cardBg,
+                            testTag = "badge_task_${task.id}"
+                        )
+                    }
                 }
 
                 // Subtitle row with tiny tomato Pomodoro icons + orange due-date badge (#F39C12)

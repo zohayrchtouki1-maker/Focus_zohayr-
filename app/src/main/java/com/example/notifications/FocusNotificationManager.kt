@@ -46,16 +46,20 @@ object FocusNotificationBus {
 
 object FocusNotificationManager {
     const val CHANNEL_POMODORO_ONGOING = "pomodoro_ongoing"
-    const val CHANNEL_POMODORO_COMPLETE = "pomodoro_complete"
-    const val CHANNEL_POMODORO_COMPLETE_SILENT = "pomodoro_complete_silent"
-    const val CHANNEL_TASK_ALARMS = "task_alarms"
-    const val CHANNEL_TASK_ALARMS_SILENT = "task_alarms_silent"
-    const val CHANNEL_AUTO_BACKUP = "auto_backup_status"
+    const val CHANNEL_POMODORO_COMPLETE = "pomodoro_complete_v2"
+    const val CHANNEL_POMODORO_COMPLETE_SILENT = "pomodoro_complete_v2"
+    const val CHANNEL_TASK_ALARMS = "task_alarms_v2"
+    const val CHANNEL_TASK_ALARMS_SILENT = "task_alarms_v2"
+    const val CHANNEL_AUTO_BACKUP = "auto_backup_status_v2"
+    const val CHANNEL_APP_BLOCKER = "app_blocker_alerts_v2"
 
     const val NOTIFICATION_ID_ONGOING_TIMER = 9001
     const val NOTIFICATION_ID_TIMER_COMPLETE = 9002
+    const val NOTIFICATION_ID_MANUAL_BACKUP = 9060
     const val NOTIFICATION_ID_AUTO_BACKUP = 9065
+    const val NOTIFICATION_ID_APP_BLOCKER = 9070
     const val EXTRA_OPEN_FULLSCREEN_TIMER = "extra_open_fullscreen_timer"
+    const val EXTRA_OPEN_SECTION = "extra_open_section"
     const val CORAL_ACCENT_COLOR = 0xFFE05246.toInt()
     private const val REQUEST_CODE_TIMER_COMPLETE = 9100
 
@@ -65,12 +69,36 @@ object FocusNotificationManager {
 
         val alarmSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        val audioAttrs = AudioAttributes.Builder()
+        val notifSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            ?: alarmSoundUri
+
+        val alarmAudioAttrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ALARM)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
 
-        // Ensure existing channel is upgraded to IMPORTANCE_DEFAULT if previously created with IMPORTANCE_LOW
+        val notifAudioAttrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+
+        // Clean up legacy silent/low-importance channels on existing installs so Android uses the upgraded IMPORTANCE_HIGH channels
+        listOf(
+            "pomodoro_complete",
+            "pomodoro_complete_silent",
+            "task_alarms",
+            "task_alarms_silent",
+            "auto_backup_status"
+        ).forEach { legacyId ->
+            try {
+                if (nm.getNotificationChannel(legacyId) != null) {
+                    nm.deleteNotificationChannel(legacyId)
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        // Ensure ongoing channel is IMPORTANCE_DEFAULT if previously created with IMPORTANCE_LOW
         try {
             val existingOngoing = nm.getNotificationChannel(CHANNEL_POMODORO_ONGOING)
             if (existingOngoing != null && existingOngoing.importance != NotificationManager.IMPORTANCE_DEFAULT) {
@@ -92,58 +120,63 @@ object FocusNotificationManager {
             lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
         }
 
-        // 2. High-Priority Pomodoro Completion Channel (importance 5 / HIGH)
+        // 2. High-Priority Pomodoro Completion Channel (IMPORTANCE_HIGH + Sound + Vibration + Heads-Up + Badge)
         val completeChannel = NotificationChannel(
             CHANNEL_POMODORO_COMPLETE,
-            "Pomodoro Completion Alarm / تنبيه انتهاء الجلسة",
+            "Pomodoro Completion Alerts / تنبيهات انتهاء الجلسة",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Rings when a Pomodoro focus or break session reaches 00:00"
-            setSound(alarmSoundUri, audioAttrs)
+            description = "Floating heads-up alerts with sound when a Pomodoro focus or break session completes"
+            setSound(alarmSoundUri, alarmAudioAttrs)
             enableVibration(true)
             vibrationPattern = longArrayOf(0L, 400L, 200L, 500L)
+            enableLights(true)
+            setShowBadge(true)
             lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
         }
 
-        val completeSilentChannel = NotificationChannel(
-            CHANNEL_POMODORO_COMPLETE_SILENT,
-            "Pomodoro Silent Alert / تنبيه صامت للمؤقت",
-            NotificationManager.IMPORTANCE_DEFAULT
-        ).apply {
-            setSound(null, null)
-            enableVibration(false)
-        }
-
-        // 3. Maximum-Priority Task Alarms Channel (importance 5 / HIGH, Public)
+        // 3. High-Priority Task Alarms Channel (IMPORTANCE_HIGH + Sound + Vibration + Heads-Up + Badge)
         val taskAlarmsChannel = NotificationChannel(
             CHANNEL_TASK_ALARMS,
             "Task Due Reminders / تذكيرات المهام",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Ringing task due-time reminders"
-            setSound(alarmSoundUri, audioAttrs)
+            description = "Floating heads-up reminders with sound for due tasks"
+            setSound(alarmSoundUri, alarmAudioAttrs)
             enableVibration(true)
             vibrationPattern = longArrayOf(0L, 500L, 250L, 600L)
+            enableLights(true)
+            setShowBadge(true)
             lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
         }
 
-        val taskAlarmsSilentChannel = NotificationChannel(
-            CHANNEL_TASK_ALARMS_SILENT,
-            "Task Silent Reminders / تذكيرات مهام صامتة",
-            NotificationManager.IMPORTANCE_DEFAULT
-        ).apply {
-            setSound(null, null)
-            enableVibration(false)
-        }
-
+        // 4. High-Priority Backup & Sync Alerts Channel (IMPORTANCE_HIGH + Sound + Vibration + Heads-Up + Badge)
         val autoBackupChannel = NotificationChannel(
             CHANNEL_AUTO_BACKUP,
-            "Auto Backup Status / حالة النسخ الاحتياطي التلقائي",
-            NotificationManager.IMPORTANCE_DEFAULT
+            "Backup & Sync Alerts / تنبيهات النسخ الاحتياطي",
+            NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Shows confirmation and details whenever automatic JSON backup runs"
-            setSound(null, null)
-            enableVibration(false)
+            description = "Floating heads-up notifications with sound when local or cloud backup completes"
+            setSound(notifSoundUri, notifAudioAttrs)
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0L, 220L, 120L, 220L)
+            enableLights(true)
+            setShowBadge(true)
+            lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+        }
+
+        // 5. High-Priority Strict App Blocker Channel (IMPORTANCE_HIGH + Sound + Vibration + Heads-Up + Badge)
+        val blockerChannel = NotificationChannel(
+            CHANNEL_APP_BLOCKER,
+            "Strict App Blocker Alerts / تنبيهات الحظر الصارم",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Floating heads-up alerts with sound when a non-whitelisted app is blocked"
+            setSound(notifSoundUri, notifAudioAttrs)
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0L, 300L, 150L, 300L)
+            enableLights(true)
+            setShowBadge(true)
             lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
         }
 
@@ -151,10 +184,9 @@ object FocusNotificationManager {
             listOf(
                 ongoingChannel,
                 completeChannel,
-                completeSilentChannel,
                 taskAlarmsChannel,
-                taskAlarmsSilentChannel,
-                autoBackupChannel
+                autoBackupChannel,
+                blockerChannel
             )
         )
     }
@@ -331,6 +363,27 @@ object FocusNotificationManager {
         alarmManager.cancel(pendingIntent)
     }
 
+    private fun buildOpenSectionPendingIntent(
+        context: Context,
+        requestCode: Int,
+        section: UnreadSection,
+        openFullScreenTimer: Boolean = false
+    ): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_OPEN_SECTION, section.name)
+            if (openFullScreenTimer) {
+                putExtra(EXTRA_OPEN_FULLSCREEN_TIMER, true)
+            }
+        }
+        return PendingIntent.getActivity(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     fun showTimerCompletionNotification(
         context: Context,
         taskTitle: String,
@@ -339,6 +392,7 @@ object FocusNotificationManager {
         isArabic: Boolean
     ) {
         cancelOngoingTimerNotification(context)
+        val badges = UnreadBadgeTracker.recordPomodoroCompleted(context)
         if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
 
         ensureChannelsCreated(context)
@@ -356,35 +410,36 @@ object FocusNotificationManager {
             if (isFocus) "Great job! Completed focus on: $taskTitle" else "Time to resume focus: $taskTitle"
         }
 
-        val openAppIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val contentPending = PendingIntent.getActivity(
-            context,
-            9020,
-            openAppIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val contentPending = buildOpenSectionPendingIntent(
+            context = context,
+            requestCode = 9020,
+            section = UnreadSection.POMODORO,
+            openFullScreenTimer = true
         )
 
-        val channelId = if (soundAndVibration) CHANNEL_POMODORO_COMPLETE else CHANNEL_POMODORO_COMPLETE_SILENT
-        val builder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_POMODORO_COMPLETE)
+            .setSmallIcon(R.drawable.ic_notification_timer)
+            .setColor(CORAL_ACCENT_COLOR)
             .setContentTitle(title)
             .setContentText(body)
-            .setPriority(if (soundAndVibration) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_DEFAULT)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSound(soundUri)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            .setFullScreenIntent(contentPending, true)
+            .setOnlyAlertOnce(false)
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
+            .setNumber(badges.pomodoroUnread.coerceAtLeast(1))
             .setAutoCancel(true)
             .setContentIntent(contentPending)
 
         if (soundAndVibration) {
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            builder.setSound(uri)
-            builder.setFullScreenIntent(contentPending, true)
             triggerDeviceVibration(context)
-        } else {
-            builder.setSilent(true)
         }
 
         try {
@@ -492,23 +547,22 @@ object FocusNotificationManager {
         soundAndVibration: Boolean,
         isArabic: Boolean
     ) {
+        UnreadBadgeTracker.recordTaskReminder(context, taskId)
         if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
 
         ensureChannelsCreated(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         val notifId = taskRequestCode(taskId)
 
-        val title = "⏰ تذكير بمهمة: $taskTitle"
-        val body = taskNotes.trim().ifEmpty { "حان الآن وقت إنجاز هذه المهمة!" }
-
-        val openAppIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        val title = if (isArabic) "⏰ تذكير بمهمة: $taskTitle" else "⏰ Task Reminder: $taskTitle"
+        val body = taskNotes.trim().ifEmpty {
+            if (isArabic) "حان الآن وقت إنجاز هذه المهمة!" else "It's time to work on this task!"
         }
-        val contentPending = PendingIntent.getActivity(
-            context,
-            notifId + 1,
-            openAppIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+
+        val contentPending = buildOpenSectionPendingIntent(
+            context = context,
+            requestCode = notifId + 1,
+            section = UnreadSection.TASKS
         )
 
         val completeIntent = Intent(context, FocusTimerReceiver::class.java).apply {
@@ -537,29 +591,32 @@ object FocusNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val channelId = if (soundAndVibration) CHANNEL_TASK_ALARMS else CHANNEL_TASK_ALARMS_SILENT
-        val builder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_TASK_ALARMS)
+            .setSmallIcon(R.drawable.ic_notification_timer)
+            .setColor(CORAL_ACCENT_COLOR)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setPriority(if (soundAndVibration) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSound(soundUri)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            .setFullScreenIntent(contentPending, true)
+            .setOnlyAlertOnce(false)
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
+            .setNumber(1)
             .setAutoCancel(true)
             .setContentIntent(contentPending)
             .addAction(0, "تم الإنجاز / Complete", completePending)
             .addAction(0, "غفوة 10 دقائق / Snooze 10m", snoozePending)
 
         if (soundAndVibration) {
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            builder.setSound(uri)
-            builder.setFullScreenIntent(contentPending, true)
             playSystemAlarmBurst(context)
             triggerDeviceVibration(context)
-        } else {
-            builder.setSilent(true)
         }
 
         try {
@@ -627,6 +684,7 @@ object FocusNotificationManager {
         totalSteps: Int = 3,
         errorReason: String = ""
     ) {
+        val badges = UnreadBadgeTracker.recordBackupCompleted(context)
         if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
         ensureChannelsCreated(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
@@ -638,6 +696,13 @@ object FocusNotificationManager {
                 append(" ($errorReason)")
             }
         }
+        val contentPending = buildOpenSectionPendingIntent(
+            context = context,
+            requestCode = 9055 + step,
+            section = UnreadSection.SETTINGS_BACKUP
+        )
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
 
         val builder = NotificationCompat.Builder(context, CHANNEL_TASK_ALARMS)
             .setSmallIcon(R.drawable.ic_notification_timer)
@@ -648,7 +713,16 @@ object FocusNotificationManager {
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSound(soundUri)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            .setFullScreenIntent(contentPending, true)
+            .setOnlyAlertOnce(false)
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
+            .setNumber(badges.settingsBackupUnread.coerceAtLeast(1))
+            .setContentIntent(contentPending)
             .setAutoCancel(true)
+
+        triggerDeviceVibration(context)
 
         try {
             nm.notify(9050 + step, builder.build())
@@ -660,6 +734,7 @@ object FocusNotificationManager {
         context: Context,
         summary: ManualBackupExportSummary
     ) {
+        val badges = UnreadBadgeTracker.recordBackupCompleted(context)
         if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
         ensureChannelsCreated(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
@@ -677,18 +752,35 @@ object FocusNotificationManager {
             append("💾 حجم الملف: ${summary.formattedFileSize} (${summary.fileName})")
         }
 
-        val builder = NotificationCompat.Builder(context, CHANNEL_POMODORO_COMPLETE_SILENT)
+        val contentPending = buildOpenSectionPendingIntent(
+            context = context,
+            requestCode = 9061,
+            section = UnreadSection.SETTINGS_BACKUP
+        )
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_AUTO_BACKUP)
             .setSmallIcon(R.drawable.ic_notification_timer)
             .setColor(CORAL_ACCENT_COLOR)
             .setContentTitle(title)
             .setContentText("💾 ${summary.formattedFileSize} • 📝 ${summary.tasksCount} مهام • 📁 ${summary.projectsCount} مشاريع")
             .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSound(soundUri)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            .setFullScreenIntent(contentPending, true)
+            .setOnlyAlertOnce(false)
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
+            .setNumber(badges.settingsBackupUnread.coerceAtLeast(1))
+            .setContentIntent(contentPending)
             .setAutoCancel(true)
 
+        triggerDeviceVibration(context)
+
         try {
-            nm.notify(9060, builder.build())
+            nm.notify(NOTIFICATION_ID_MANUAL_BACKUP, builder.build())
         } catch (_: SecurityException) {
         }
     }
@@ -697,6 +789,7 @@ object FocusNotificationManager {
         context: Context,
         summary: ManualBackupExportSummary
     ) {
+        val badges = UnreadBadgeTracker.recordBackupCompleted(context)
         if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
         ensureChannelsCreated(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
@@ -713,20 +806,91 @@ object FocusNotificationManager {
             append("💾 حجم الملف: ${summary.formattedFileSize}")
         }
 
+        val contentPending = buildOpenSectionPendingIntent(
+            context = context,
+            requestCode = 9066,
+            section = UnreadSection.SETTINGS_BACKUP
+        )
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
         val builder = NotificationCompat.Builder(context, CHANNEL_AUTO_BACKUP)
             .setSmallIcon(R.drawable.ic_notification_timer)
             .setColor(CORAL_ACCENT_COLOR)
             .setContentTitle(title)
             .setContentText("🕒 ${summary.updatedTimestamp} • 📝 ${summary.tasksCount} مهام • 💾 ${summary.formattedFileSize}")
             .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOnlyAlertOnce(true)
-            .setSilent(true)
+            .setSound(soundUri)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            .setFullScreenIntent(contentPending, true)
+            .setOnlyAlertOnce(false)
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
+            .setNumber(badges.settingsBackupUnread.coerceAtLeast(1))
+            .setContentIntent(contentPending)
             .setAutoCancel(true)
+
+        triggerDeviceVibration(context)
 
         try {
             nm.notify(NOTIFICATION_ID_AUTO_BACKUP, builder.build())
+        } catch (_: SecurityException) {
+        }
+    }
+
+    fun showAppBlockerTriggeredNotification(
+        context: Context,
+        blockedPackageName: String,
+        appLabel: String = blockedPackageName,
+        isArabic: Boolean = true
+    ) {
+        val badges = UnreadBadgeTracker.recordBlockerTriggered(context)
+        if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
+        ensureChannelsCreated(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+
+        val resolvedLabel = appLabel.trim().ifBlank { blockedPackageName }
+        val title = if (isArabic) {
+            "🛡️ الحظر الصارم: تم إغلاق $resolvedLabel"
+        } else {
+            "🛡️ Strict Blocker: Blocked $resolvedLabel"
+        }
+        val body = if (isArabic) {
+            "ممنوع فتح التطبيقات غير المسموحة أثناء جلسة التركيز النشطة."
+        } else {
+            "Non-whitelisted apps cannot be opened during an active strict focus session."
+        }
+
+        val contentPending = buildOpenSectionPendingIntent(
+            context = context,
+            requestCode = 9071,
+            section = UnreadSection.BLOCKER
+        )
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_APP_BLOCKER)
+            .setSmallIcon(R.drawable.ic_notification_timer)
+            .setColor(CORAL_ACCENT_COLOR)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSound(soundUri)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            .setFullScreenIntent(contentPending, true)
+            .setOnlyAlertOnce(false)
+            .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
+            .setNumber(badges.blockerUnread.coerceAtLeast(1))
+            .setContentIntent(contentPending)
+            .setAutoCancel(true)
+
+        triggerDeviceVibration(context)
+
+        try {
+            nm.notify(NOTIFICATION_ID_APP_BLOCKER, builder.build())
         } catch (_: SecurityException) {
         }
     }

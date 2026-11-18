@@ -528,4 +528,125 @@ class ExampleRobolectricTest {
             vm.deleteProject(it.id)
         }
     }
+
+    @Test
+    fun `all alert notification channels use IMPORTANCE_HIGH with sound and badge enabled`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        FocusNotificationManager.ensureChannelsCreated(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        val highImportanceChannels = listOf(
+            FocusNotificationManager.CHANNEL_POMODORO_COMPLETE,
+            FocusNotificationManager.CHANNEL_TASK_ALARMS,
+            FocusNotificationManager.CHANNEL_AUTO_BACKUP,
+            FocusNotificationManager.CHANNEL_APP_BLOCKER
+        )
+        highImportanceChannels.forEach { channelId ->
+            val ch = nm.getNotificationChannel(channelId)
+            assertNotNull("Missing channel $channelId", ch)
+            assertEquals("Expected IMPORTANCE_HIGH for $channelId", NotificationManager.IMPORTANCE_HIGH, ch.importance)
+            assertTrue("Expected badge enabled for $channelId", ch.canShowBadge())
+            assertNotNull("Expected sound for $channelId", ch.sound)
+        }
+    }
+
+    @Test
+    fun `universal unread badges increment across all sections and auto-clear when viewed`() {
+        val app = ApplicationProvider.getApplicationContext<android.app.Application>()
+        org.robolectric.Shadows.shadowOf(app)
+            .grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val nm = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val shadowNm = org.robolectric.Shadows.shadowOf(nm)
+
+        com.example.notifications.UnreadBadgeTracker.resetAll(app)
+        val vm = com.example.viewmodel.FocusTodoViewModel(app)
+        vm.resetDemoData()
+
+        val today = DateUtils.todayEpochDay()
+        vm.addTask(
+            title = "مهمة التذكير والغد",
+            estimatedPomodoros = 2,
+            dueDateEpochDay = today,
+            isSomeday = false,
+            isEvent = false,
+            priority = TaskPriority.HIGH,
+            projectId = "proj_study",
+            tagIds = listOf("tag_imp"),
+            reminderTime = "10:00"
+        )
+        val task = vm.uiState.value.data.tasks.first { it.title == "مهمة التذكير والغد" }
+
+        // 1. Trigger Task Reminder -> heads-up notif + tasksUnread = 1
+        FocusNotificationManager.showTaskReminderNotification(
+            context = app,
+            taskId = task.id,
+            taskTitle = task.title,
+            taskNotes = "مراجعة الفصل الأول",
+            soundAndVibration = true,
+            isArabic = true
+        )
+        val taskNotif = shadowNm.getNotification(FocusNotificationManager.taskRequestCode(task.id))
+        assertNotNull(taskNotif)
+        assertEquals(FocusNotificationManager.CHANNEL_TASK_ALARMS, taskNotif.channelId)
+        assertEquals(1, taskNotif.number)
+        assertEquals(1, com.example.notifications.UnreadBadgeTracker.getState(app).tasksUnread)
+        assertTrue(com.example.notifications.UnreadBadgeTracker.getState(app).unreadTaskIds.contains(task.id))
+
+        // 2. Trigger Pomodoro Completion -> heads-up notif + pomodoroUnread = 1
+        FocusNotificationManager.showTimerCompletionNotification(
+            context = app,
+            taskTitle = task.title,
+            phaseName = TimerPhase.FOCUS.name,
+            soundAndVibration = true,
+            isArabic = true
+        )
+        val timerNotif = shadowNm.getNotification(FocusNotificationManager.NOTIFICATION_ID_TIMER_COMPLETE)
+        assertNotNull(timerNotif)
+        assertEquals(FocusNotificationManager.CHANNEL_POMODORO_COMPLETE, timerNotif.channelId)
+        assertEquals(1, timerNotif.number)
+        assertEquals(1, com.example.notifications.UnreadBadgeTracker.getState(app).pomodoroUnread)
+
+        // 3. Trigger App Blocker Alert -> heads-up notif + blockerUnread = 1
+        FocusNotificationManager.showAppBlockerTriggeredNotification(
+            context = app,
+            blockedPackageName = "com.instagram.android",
+            appLabel = "Instagram",
+            isArabic = true
+        )
+        val blockerNotif = shadowNm.getNotification(FocusNotificationManager.NOTIFICATION_ID_APP_BLOCKER)
+        assertNotNull(blockerNotif)
+        assertEquals(FocusNotificationManager.CHANNEL_APP_BLOCKER, blockerNotif.channelId)
+        assertEquals(1, blockerNotif.number)
+        assertEquals(1, com.example.notifications.UnreadBadgeTracker.getState(app).blockerUnread)
+
+        // 4. Record Stats & Forest Activity + Backup Alert
+        com.example.notifications.UnreadBadgeTracker.recordStatsAndForestActivity(app, recordReports = true, recordForest = true)
+        assertEquals(1, com.example.notifications.UnreadBadgeTracker.getState(app).reportsUnread)
+        assertEquals(1, com.example.notifications.UnreadBadgeTracker.getState(app).forestUnread)
+        assertTrue(com.example.notifications.UnreadBadgeTracker.getState(app).settingsBackupUnread >= 1)
+        assertTrue(com.example.notifications.UnreadBadgeTracker.getState(app).totalUnread >= 6)
+
+        // 5. Auto-Clear on View for each section
+        vm.openTaskInspector(task.id)
+        assertEquals(0, com.example.notifications.UnreadBadgeTracker.getState(app).tasksUnread)
+        assertEquals(null, shadowNm.getNotification(FocusNotificationManager.taskRequestCode(task.id)))
+
+        vm.setShowFullScreenTimer(true)
+        assertEquals(0, com.example.notifications.UnreadBadgeTracker.getState(app).pomodoroUnread)
+        assertEquals(null, shadowNm.getNotification(FocusNotificationManager.NOTIFICATION_ID_TIMER_COMPLETE))
+
+        vm.setShowStrictBlockerSetup(true)
+        assertEquals(0, com.example.notifications.UnreadBadgeTracker.getState(app).blockerUnread)
+        assertEquals(null, shadowNm.getNotification(FocusNotificationManager.NOTIFICATION_ID_APP_BLOCKER))
+
+        vm.setShowReports(true)
+        assertEquals(0, com.example.notifications.UnreadBadgeTracker.getState(app).reportsUnread)
+
+        vm.setShowForest(true)
+        assertEquals(0, com.example.notifications.UnreadBadgeTracker.getState(app).forestUnread)
+
+        vm.setShowSettings(true)
+        assertEquals(0, com.example.notifications.UnreadBadgeTracker.getState(app).settingsBackupUnread)
+        assertEquals(0, com.example.notifications.UnreadBadgeTracker.getState(app).totalUnread)
+    }
 }
