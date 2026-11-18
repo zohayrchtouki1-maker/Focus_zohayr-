@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "FocusToDo"
+rootProject.name = "FocusTomato"
 
 include(":app")

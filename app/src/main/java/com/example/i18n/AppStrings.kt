@@ -410,7 +410,7 @@ object AppStrings {
     )
 
     private val en = Strings(
-        appTitle = "Focus To-Do",
+        appTitle = "FocusTomato",
         localSyncReady = "Auto-saved Locally",
         reports = "Reports",
         forest = "Forest",

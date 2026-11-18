@@ -199,9 +199,9 @@ fun SettingsDialog(
                 putExtra(
                     Intent.EXTRA_TEXT,
                     if (isArabic) {
-                        "نسخة احتياطية لتطبيق Focus To-Do (${backupFile.name})"
+                        "نسخة احتياطية لتطبيق FocusTomato (${backupFile.name})"
                     } else {
-                        "Focus To-Do Backup (${backupFile.name})"
+                        "FocusTomato Backup (${backupFile.name})"
                     }
                 )
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

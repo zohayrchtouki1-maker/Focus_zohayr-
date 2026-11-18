@@ -425,7 +425,7 @@ fun StrictBlockerSetupDialog(
                     PermissionGateCard(
                         stepTitle = "الصلاحية 2: خدمات الوصول (Accessibility Service)",
                         description = "ترصد فتح أي تطبيق غير مسموح به أثناء جلسة التركيز وتخرجه فورًا إلى الشاشة الرئيسية.",
-                        instructions = "خطوات التفعيل (Infinix / XOS وأندرويد):\nالإعدادات > ميزات إضافية / إمكانية الوصول > التطبيقات المثبتة > Focus To-Do > تفعيل",
+                        instructions = "خطوات التفعيل (Infinix / XOS وأندرويد):\nالإعدادات > ميزات إضافية / إمكانية الوصول > التطبيقات المثبتة > FocusTomato > تفعيل",
                         isGranted = permStatus.isAccessibilityServiceGranted,
                         buttonText = "تفعيل خدمة الوصول",
                         icon = Icons.Default.AccessibilityNew,
