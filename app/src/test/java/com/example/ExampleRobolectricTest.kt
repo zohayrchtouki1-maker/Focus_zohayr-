@@ -242,11 +242,17 @@ class ExampleRobolectricTest {
             assertTrue(masterFile.readText().contains("existing_task_1"))
 
             assertTrue(repo.getLastAutoBackupTimeMillis() > 0L)
-            assertNotNull(nm.getNotificationChannel(FocusNotificationManager.CHANNEL_AUTO_BACKUP))
+            val autoBackupChannel = nm.getNotificationChannel(FocusNotificationManager.CHANNEL_AUTO_BACKUP)
+            assertNotNull(autoBackupChannel)
+            assertEquals(NotificationManager.IMPORTANCE_MIN, autoBackupChannel.importance)
+            assertEquals(null, autoBackupChannel.sound)
+            assertEquals(false, autoBackupChannel.shouldVibrate())
             val autoBackupNotif = org.robolectric.Shadows.shadowOf(nm)
                 .getNotification(FocusNotificationManager.NOTIFICATION_ID_AUTO_BACKUP)
             assertNotNull(autoBackupNotif)
             assertEquals(FocusNotificationManager.CHANNEL_AUTO_BACKUP, autoBackupNotif.channelId)
+            assertEquals(null, autoBackupNotif.fullScreenIntent)
+            assertEquals(null, autoBackupNotif.sound)
 
             val loadedState = repo.loadState()
             assertEquals(1, loadedState.tasks.size)
@@ -530,7 +536,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `all alert notification channels use IMPORTANCE_HIGH with sound and badge enabled`() {
+    fun `all alert notification channels use IMPORTANCE_HIGH while auto-backup channel is completely silent`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         FocusNotificationManager.ensureChannelsCreated(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -538,7 +544,7 @@ class ExampleRobolectricTest {
         val highImportanceChannels = listOf(
             FocusNotificationManager.CHANNEL_POMODORO_COMPLETE,
             FocusNotificationManager.CHANNEL_TASK_ALARMS,
-            FocusNotificationManager.CHANNEL_AUTO_BACKUP,
+            FocusNotificationManager.CHANNEL_MANUAL_BACKUP,
             FocusNotificationManager.CHANNEL_APP_BLOCKER
         )
         highImportanceChannels.forEach { channelId ->
@@ -548,6 +554,13 @@ class ExampleRobolectricTest {
             assertTrue("Expected badge enabled for $channelId", ch.canShowBadge())
             assertNotNull("Expected sound for $channelId", ch.sound)
         }
+
+        val silentAutoBackupChannel = nm.getNotificationChannel(FocusNotificationManager.CHANNEL_AUTO_BACKUP)
+        assertNotNull("Missing silent auto-backup channel", silentAutoBackupChannel)
+        assertEquals(NotificationManager.IMPORTANCE_MIN, silentAutoBackupChannel.importance)
+        assertEquals(null, silentAutoBackupChannel.sound)
+        assertEquals(false, silentAutoBackupChannel.shouldVibrate())
+        assertEquals(false, silentAutoBackupChannel.canShowBadge())
     }
 
     @Test

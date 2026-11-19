@@ -50,7 +50,8 @@ object FocusNotificationManager {
     const val CHANNEL_POMODORO_COMPLETE_SILENT = "pomodoro_complete_v2"
     const val CHANNEL_TASK_ALARMS = "task_alarms_v2"
     const val CHANNEL_TASK_ALARMS_SILENT = "task_alarms_v2"
-    const val CHANNEL_AUTO_BACKUP = "auto_backup_status_v2"
+    const val CHANNEL_AUTO_BACKUP = "auto_backup_silent_v3"
+    const val CHANNEL_MANUAL_BACKUP = "manual_backup_status_v2"
     const val CHANNEL_APP_BLOCKER = "app_blocker_alerts_v2"
 
     const val NOTIFICATION_ID_ONGOING_TIMER = 9001
@@ -82,13 +83,14 @@ object FocusNotificationManager {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
 
-        // Clean up legacy silent/low-importance channels on existing installs so Android uses the upgraded IMPORTANCE_HIGH channels
+        // Clean up legacy channels on existing installs so Android applies updated channel importance/sound settings
         listOf(
             "pomodoro_complete",
             "pomodoro_complete_silent",
             "task_alarms",
             "task_alarms_silent",
-            "auto_backup_status"
+            "auto_backup_status",
+            "auto_backup_status_v2"
         ).forEach { legacyId ->
             try {
                 if (nm.getNotificationChannel(legacyId) != null) {
@@ -150,13 +152,27 @@ object FocusNotificationManager {
             lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
         }
 
-        // 4. High-Priority Backup & Sync Alerts Channel (IMPORTANCE_HIGH + Sound + Vibration + Heads-Up + Badge)
+        // 4. Silent Background Auto-Backup Channel (IMPORTANCE_MIN, no sound, no vibration, no heads-up)
         val autoBackupChannel = NotificationChannel(
             CHANNEL_AUTO_BACKUP,
-            "Backup & Sync Alerts / تنبيهات النسخ الاحتياطي",
+            "Silent Auto-Backup / النسخ الاحتياطي التلقائي الصامت",
+            NotificationManager.IMPORTANCE_MIN
+        ).apply {
+            description = "Silent background status for automatic backup without pop-ups, sound, or vibration"
+            setSound(null, null)
+            enableVibration(false)
+            enableLights(false)
+            setShowBadge(false)
+            lockscreenVisibility = NotificationCompat.VISIBILITY_SECRET
+        }
+
+        // 5. High-Priority Manual Backup Alerts Channel (IMPORTANCE_HIGH + Sound + Vibration + Heads-Up + Badge)
+        val manualBackupChannel = NotificationChannel(
+            CHANNEL_MANUAL_BACKUP,
+            "Manual Backup Alerts / تنبيهات النسخ اليدوي",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Floating heads-up notifications with sound when local or cloud backup completes"
+            description = "Floating heads-up notifications with sound when manual backup completes"
             setSound(notifSoundUri, notifAudioAttrs)
             enableVibration(true)
             vibrationPattern = longArrayOf(0L, 220L, 120L, 220L)
@@ -165,7 +181,7 @@ object FocusNotificationManager {
             lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
         }
 
-        // 5. High-Priority Strict App Blocker Channel (IMPORTANCE_HIGH + Sound + Vibration + Heads-Up + Badge)
+        // 6. High-Priority Strict App Blocker Channel (IMPORTANCE_HIGH + Sound + Vibration + Heads-Up + Badge)
         val blockerChannel = NotificationChannel(
             CHANNEL_APP_BLOCKER,
             "Strict App Blocker Alerts / تنبيهات الحظر الصارم",
@@ -186,6 +202,7 @@ object FocusNotificationManager {
                 completeChannel,
                 taskAlarmsChannel,
                 autoBackupChannel,
+                manualBackupChannel,
                 blockerChannel
             )
         )
@@ -759,7 +776,7 @@ object FocusNotificationManager {
         )
         val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
-        val builder = NotificationCompat.Builder(context, CHANNEL_AUTO_BACKUP)
+        val builder = NotificationCompat.Builder(context, CHANNEL_MANUAL_BACKUP)
             .setSmallIcon(R.drawable.ic_notification_timer)
             .setColor(CORAL_ACCENT_COLOR)
             .setContentTitle(title)
@@ -789,7 +806,7 @@ object FocusNotificationManager {
         context: Context,
         summary: ManualBackupExportSummary
     ) {
-        val badges = UnreadBadgeTracker.recordBackupCompleted(context)
+        UnreadBadgeTracker.recordBackupCompleted(context)
         if (!SystemPermissionsHelper.isNotificationPermissionGranted(context)) return
         ensureChannelsCreated(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
@@ -811,7 +828,6 @@ object FocusNotificationManager {
             requestCode = 9066,
             section = UnreadSection.SETTINGS_BACKUP
         )
-        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
         val builder = NotificationCompat.Builder(context, CHANNEL_AUTO_BACKUP)
             .setSmallIcon(R.drawable.ic_notification_timer)
@@ -819,19 +835,15 @@ object FocusNotificationManager {
             .setContentTitle(title)
             .setContentText("🕒 ${summary.updatedTimestamp} • 📝 ${summary.tasksCount} مهام • 💾 ${summary.formattedFileSize}")
             .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setSound(soundUri)
-            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
-            .setFullScreenIntent(contentPending, true)
-            .setOnlyAlertOnce(false)
-            .setBadgeIconType(NotificationCompat.BADGE_ICON_SMALL)
-            .setNumber(badges.settingsBackupUnread.coerceAtLeast(1))
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setSilent(true)
+            .setSound(null)
+            .setDefaults(0)
+            .setOnlyAlertOnce(true)
             .setContentIntent(contentPending)
             .setAutoCancel(true)
-
-        triggerDeviceVibration(context)
 
         try {
             nm.notify(NOTIFICATION_ID_AUTO_BACKUP, builder.build())
