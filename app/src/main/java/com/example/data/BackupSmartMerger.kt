@@ -4,338 +4,124 @@ import com.example.model.AppBackupState
 import com.example.model.AppSettings
 import com.example.model.ExportedPrefEntry
 import com.example.model.FocusRecord
+import com.example.model.FolderItem
+import com.example.model.ForestState
 import com.example.model.PlantSpecies
+import com.example.model.PlantedTree
+import com.example.model.ProjectItem
+import com.example.model.SubtaskItem
+import com.example.model.TagItem
+import com.example.model.TaskItem
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 
+/**
+ * Full-State Smart Merge & Empty-State Guard Engine for FocusTomato local backup.
+ *
+ * Enforces:
+ * 1. Empty-State Guard detection so fresh installs never overwrite existing backups.
+ * 2. Collection Unions by unique ID (keeping latest updatedAt on conflicts) while honoring local soft-delete tombstones.
+ * 3. Cumulative / Max preservation for Forest growth, sunlight points, unlocked species, planted trees, and daily streaks.
+ * 4. Smart timestamp resolution for AppSettings (inheriting backup settings on fresh installs, honoring newer user edits).
+ */
 object BackupSmartMerger {
-    private val DEFAULT_PROJECT_IDS = setOf("proj_study", "proj_skills", "proj_routine", "proj_side")
-    private val DEFAULT_FOLDER_IDS = setOf("folder_acad", "folder_life")
-    private val DEFAULT_TAG_IDS = setOf("tag_imp", "tag_rev", "tag_read", "tag_code")
 
-    fun hasDefaultUnmodifiedSettings(settings: AppSettings): Boolean {
-        val defaults = AppSettings()
-        return settings.pomodoroMinutes == defaults.pomodoroMinutes &&
-            settings.shortBreakMinutes == defaults.shortBreakMinutes &&
-            settings.longBreakMinutes == defaults.longBreakMinutes &&
-            settings.longBreakInterval == defaults.longBreakInterval &&
-            settings.autoStartBreaks == defaults.autoStartBreaks &&
-            settings.autoStartNextPomodoro == defaults.autoStartNextPomodoro &&
-            settings.disableBreaks == defaults.disableBreaks &&
-            settings.alarmEnabled == defaults.alarmEnabled &&
-            settings.enableTaskReminders == defaults.enableTaskReminders &&
-            settings.persistentTimerNotification == defaults.persistentTimerNotification &&
-            settings.alarmSoundAndVibration == defaults.alarmSoundAndVibration &&
-            settings.darkTheme == defaults.darkTheme &&
-            settings.accentColorHex == defaults.accentColorHex &&
-            settings.language == defaults.language &&
-            settings.whiteNoise == defaults.whiteNoise &&
-            settings.whiteNoiseVolume == defaults.whiteNoiseVolume &&
-            settings.strictBlockerEnabled == defaults.strictBlockerEnabled &&
+    private val defaultProjectIds = setOf("proj_study", "proj_skills", "proj_routine", "proj_side")
+    private val defaultFolderIds = setOf("folder_acad", "folder_life")
+    private val defaultTagIds = setOf("tag_imp", "tag_rev", "tag_read", "tag_code")
+
+    fun areSettingsDefaultUnmodified(settings: AppSettings): Boolean {
+        if (settings.settingsUpdatedAt > 0L) return false
+        val def = AppSettings()
+        return settings.pomodoroMinutes == def.pomodoroMinutes &&
+            settings.shortBreakMinutes == def.shortBreakMinutes &&
+            settings.longBreakMinutes == def.longBreakMinutes &&
+            settings.longBreakInterval == def.longBreakInterval &&
+            settings.autoStartBreaks == def.autoStartBreaks &&
+            settings.autoStartNextPomodoro == def.autoStartNextPomodoro &&
+            settings.disableBreaks == def.disableBreaks &&
+            settings.alarmEnabled == def.alarmEnabled &&
+            settings.enableTaskReminders == def.enableTaskReminders &&
+            settings.persistentTimerNotification == def.persistentTimerNotification &&
+            settings.alarmSoundAndVibration == def.alarmSoundAndVibration &&
+            settings.lockedInRecentsConfirmed == def.lockedInRecentsConfirmed &&
+            settings.darkTheme == def.darkTheme &&
+            settings.accentColorHex.equals(def.accentColorHex, ignoreCase = true) &&
+            settings.language == def.language &&
+            settings.whiteNoise == def.whiteNoise &&
+            settings.whiteNoiseVolume == def.whiteNoiseVolume &&
+            settings.strictBlockerEnabled == def.strictBlockerEnabled &&
             settings.whitelistedPackages.isEmpty() &&
             settings.blockedPackages.isEmpty() &&
-            settings.geminiModelId == defaults.geminiModelId &&
-            settings.geminiApiKey.isBlank()
-    }
-
-    fun isAppStateEffectivelyEmpty(state: AppBackupState): Boolean {
-        val hasNoTasks = state.tasks.isEmpty()
-        val hasNoSessions = state.focusRecords.isEmpty() && state.pomodoroSessions.isEmpty()
-        val hasNoTrees = state.forestState.plantedHistory.isEmpty() &&
-            state.forestState.sunlightPoints == 0 &&
-            state.forestState.currentGrowthMinutes == 0
-        val hasOnlyDefaultOrg = state.projects.all { it.id in DEFAULT_PROJECT_IDS } &&
-            state.folders.all { it.id in DEFAULT_FOLDER_IDS } &&
-            state.tags.all { it.id in DEFAULT_TAG_IDS }
-        val hasUnmodifiedSettings = state.settings.settingsUpdatedAt == 0L &&
-            hasDefaultUnmodifiedSettings(state.settings)
-        return hasNoTasks && hasNoSessions && hasNoTrees && hasOnlyDefaultOrg && hasUnmodifiedSettings
-    }
-
-    fun isBackupStateNonEmpty(backup: AppBackupState): Boolean {
-        return backup.tasks.isNotEmpty() ||
-            backup.focusRecords.isNotEmpty() ||
-            backup.pomodoroSessions.isNotEmpty() ||
-            backup.forestState.plantedHistory.isNotEmpty() ||
-            backup.forestState.sunlightPoints > 0 ||
-            backup.forestState.currentGrowthMinutes > 0 ||
-            backup.projects.any { it.id !in DEFAULT_PROJECT_IDS } ||
-            backup.folders.any { it.id !in DEFAULT_FOLDER_IDS } ||
-            backup.tags.any { it.id !in DEFAULT_TAG_IDS } ||
-            backup.settings.settingsUpdatedAt > 0L ||
-            !hasDefaultUnmodifiedSettings(backup.settings)
+            settings.geminiApiKey.isBlank() &&
+            settings.geminiModelId == def.geminiModelId
     }
 
     /**
-     * Computes (currentDailyStreak, bestDailyStreak) from the combined focus session history.
+     * Returns true if the current app state is completely empty (fresh install/reinstall:
+     * 0 tasks, 0 sessions, no custom projects/folders/tags, no tree progress, and default unmodified settings).
      */
-    fun computeDailyStreaks(
-        sessions: List<FocusRecord>,
-        todayEpochDay: Long = DateUtils.todayEpochDay()
-    ): Pair<Int, Int> {
-        if (sessions.isEmpty()) return 0 to 0
+    fun isAppStateEffectivelyEmpty(state: AppBackupState): Boolean {
+        val hasTasks = state.tasks.isNotEmpty()
+        val hasSessions = state.focusRecords.isNotEmpty() || state.pomodoroSessions.isNotEmpty()
+        val hasCustomProjects = state.projects.any { it.id !in defaultProjectIds }
+        val hasCustomFolders = state.folders.any { it.id !in defaultFolderIds }
+        val hasCustomTags = state.tags.any { it.id !in defaultTagIds }
+        val hasForestProgress = state.forestState.plantedHistory.isNotEmpty() ||
+            state.forestState.sunlightPoints > 0 ||
+            state.forestState.currentGrowthMinutes > 0 ||
+            state.forestState.unlockedSpecies.any { it != PlantSpecies.PINE }
+        val hasModifiedSettings = !areSettingsDefaultUnmodified(state.settings)
 
-        val parser = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
-        val activeDays = sessions.mapNotNull { rec ->
-            val fromKey = rec.dateKey.trim().takeIf { it.isNotEmpty() }?.let { key ->
-                runCatching {
-                    val d = parser.parse(key) ?: return@let null
-                    d.time / 86_400_000L
-                }.getOrNull()
-            }
-            fromKey ?: DateUtils.epochDayFromMillis(rec.startedAtEpochMillis)
-        }.distinct().sorted()
+        return !hasTasks &&
+            !hasSessions &&
+            !hasCustomProjects &&
+            !hasCustomFolders &&
+            !hasCustomTags &&
+            !hasForestProgress &&
+            !hasModifiedSettings
+    }
 
-        if (activeDays.isEmpty()) return 0 to 0
-
-        var bestStreak = 1
-        var runLength = 1
-        for (i in 1 until activeDays.size) {
-            if (activeDays[i] == activeDays[i - 1] + 1L) {
-                runLength++
-                if (runLength > bestStreak) bestStreak = runLength
-            } else {
-                runLength = 1
-            }
-        }
-
-        val lastDay = activeDays.last()
-        val currentStreak = if (lastDay == todayEpochDay || lastDay == todayEpochDay - 1L) {
-            var cur = 1
-            for (i in activeDays.lastIndex downTo 1) {
-                if (activeDays[i] - activeDays[i - 1] == 1L) {
-                    cur++
-                } else {
-                    break
-                }
-            }
-            cur
-        } else {
-            0
-        }
-
-        return currentStreak to bestStreak
+    fun isBackupStateNonEmpty(state: AppBackupState): Boolean {
+        return !isAppStateEffectivelyEmpty(state)
     }
 
     /**
-     * Full-State Smart Merge:
-     * Unions all collections by ID keeping latest updatedAt on conflicts, applies local soft-delete tombstones,
-     * preserves max/cumulative gamification stats & streaks, and resolves settings by settingsUpdatedAt timestamp.
+     * Performs a contradiction-free Full-State Smart Merge combining [live] app state with [existingDisk] backup.
+     * Any item whose ID is in [localDeletedIds] is intentionally excluded so deleted items do not reappear.
      */
     fun smartMerge(
         live: AppBackupState,
         existingDisk: AppBackupState,
-        localDeletedIds: Set<String>
+        localDeletedIds: Set<String> = emptySet()
     ): AppBackupState {
-        // 1. Tasks & Subtasks (Union by ID, latest updatedAtEpochMillis wins, excluding localDeletedIds)
-        val liveTasksById = live.tasks.associateBy { it.id }
-        val diskTasksById = existingDisk.tasks.associateBy { it.id }
-        val allTaskIds = (liveTasksById.keys + diskTasksById.keys)
-            .filterNot { it in localDeletedIds }
+        val deleted = localDeletedIds.filter { it.isNotBlank() }.toSet()
 
-        val mergedTasks = allTaskIds.mapNotNull { id ->
-            val liveTask = liveTasksById[id]
-            val diskTask = diskTasksById[id]
-            when {
-                liveTask != null && diskTask != null -> {
-                    val primary = if (diskTask.updatedAtEpochMillis > liveTask.updatedAtEpochMillis) {
-                        diskTask
-                    } else {
-                        liveTask
-                    }
-                    // Union subtasks by ID, keeping latest updatedAt, excluding localDeletedIds
-                    val liveSubs = liveTask.subtasks.associateBy { it.id }
-                    val diskSubs = diskTask.subtasks.associateBy { it.id }
-                    val mergedSubtasks = (liveSubs.keys + diskSubs.keys)
-                        .filterNot { it in localDeletedIds }
-                        .mapNotNull { subId ->
-                            val ls = liveSubs[subId]
-                            val ds = diskSubs[subId]
-                            when {
-                                ls != null && ds != null -> {
-                                    val lTs = maxOf(ls.updatedAt, ls.createdAt)
-                                    val dTs = maxOf(ds.updatedAt, ds.createdAt)
-                                    if (dTs > lTs) ds else ls
-                                }
-                                ls != null -> ls
-                                else -> ds
-                            }
-                        }
-                        .sortedBy { it.sortOrder }
+        val mergedTasks = mergeTasks(live.tasks, existingDisk.tasks, deleted)
+        val mergedProjects = mergeProjects(live.projects, existingDisk.projects, deleted)
+        val mergedFolders = mergeFolders(live.folders, existingDisk.folders, deleted)
+        val mergedTags = mergeTags(live.tags, existingDisk.tags, deleted)
 
-                    primary.copy(
-                        subtasks = mergedSubtasks,
-                        completedPomodoros = maxOf(liveTask.completedPomodoros, diskTask.completedPomodoros),
-                        elapsedFocusMinutes = maxOf(liveTask.elapsedFocusMinutes, diskTask.elapsedFocusMinutes)
-                    )
-                }
-                liveTask != null -> liveTask.copy(
-                    subtasks = liveTask.subtasks.filterNot { it.id in localDeletedIds }
-                )
-                diskTask != null -> diskTask.copy(
-                    subtasks = diskTask.subtasks.filterNot { it.id in localDeletedIds }
-                )
-                else -> null
-            }
-        }
+        val liveSessions = (live.focusRecords + live.pomodoroSessions).distinctBy { it.id }
+        val diskSessions = (existingDisk.focusRecords + existingDisk.pomodoroSessions).distinctBy { it.id }
+        val mergedSessions = mergeFocusRecords(liveSessions, diskSessions, deleted)
 
-        // 2. Projects (Union by ID, latest updatedAt wins, excluding localDeletedIds)
-        val liveProjectsById = live.projects.associateBy { it.id }
-        val diskProjectsById = existingDisk.projects.associateBy { it.id }
-        val mergedProjects = (liveProjectsById.keys + diskProjectsById.keys)
-            .filterNot { it in localDeletedIds }
-            .mapNotNull { id ->
-                val lp = liveProjectsById[id]
-                val dp = diskProjectsById[id]
-                when {
-                    lp != null && dp != null -> {
-                        val lTs = maxOf(lp.updatedAt, lp.createdAt)
-                        val dTs = maxOf(dp.updatedAt, dp.createdAt)
-                        if (dTs > lTs) dp else lp
-                    }
-                    lp != null -> lp
-                    else -> dp
-                }
-            }
-
-        // 3. Folders (Union by ID, latest updatedAt wins, excluding localDeletedIds)
-        val liveFoldersById = live.folders.associateBy { it.id }
-        val diskFoldersById = existingDisk.folders.associateBy { it.id }
-        val mergedFolders = (liveFoldersById.keys + diskFoldersById.keys)
-            .filterNot { it in localDeletedIds }
-            .mapNotNull { id ->
-                val lf = liveFoldersById[id]
-                val df = diskFoldersById[id]
-                when {
-                    lf != null && df != null -> {
-                        val lTs = maxOf(lf.updatedAt, lf.createdAt)
-                        val dTs = maxOf(df.updatedAt, df.createdAt)
-                        if (dTs > lTs) df else lf
-                    }
-                    lf != null -> lf
-                    else -> df
-                }
-            }
-
-        // 4. Tags (Union by ID, latest updatedAt wins, excluding localDeletedIds)
-        val liveTagsById = live.tags.associateBy { it.id }
-        val diskTagsById = existingDisk.tags.associateBy { it.id }
-        val mergedTags = (liveTagsById.keys + diskTagsById.keys)
-            .filterNot { it in localDeletedIds }
-            .mapNotNull { id ->
-                val lt = liveTagsById[id]
-                val dt = diskTagsById[id]
-                when {
-                    lt != null && dt != null -> if (dt.updatedAt > lt.updatedAt) dt else lt
-                    lt != null -> lt
-                    else -> dt
-                }
-            }
-
-        // 5. Pomodoro History & Focus Session Logs (Union by ID, never decreasing total focus time)
-        val combinedRawRecords = existingDisk.focusRecords +
-            existingDisk.pomodoroSessions +
-            live.focusRecords +
-            live.pomodoroSessions
-        val mergedRecords = combinedRawRecords
-            .filterNot { it.id in localDeletedIds }
-            .groupBy { it.id }
-            .map { (_, copies) ->
-                copies.maxWithOrNull(
-                    compareBy<FocusRecord> { it.endTimeEpochMillis }
-                        .thenBy { it.durationSeconds }
-                        .thenBy { it.durationMinutes }
-                ) ?: copies.first()
-            }
-            .sortedByDescending { it.startedAtEpochMillis }
-
-        // 6. Settings, Theme Colors, Timer Preferences, Gemini AI & Blocker Lists (Smart Timestamp Resolution)
-        val liveSettings = live.settings
-        val diskSettings = existingDisk.settings
-        val useDiskSettings = when {
-            liveSettings.settingsUpdatedAt == 0L && hasDefaultUnmodifiedSettings(liveSettings) -> {
-                diskSettings.settingsUpdatedAt > 0L || !hasDefaultUnmodifiedSettings(diskSettings)
-            }
-            diskSettings.settingsUpdatedAt > liveSettings.settingsUpdatedAt -> true
-            liveSettings.settingsUpdatedAt > diskSettings.settingsUpdatedAt -> false
-            else -> false
-        }
-
-        val baseSettings = if (useDiskSettings) diskSettings else liveSettings
-        val otherSettings = if (useDiskSettings) liveSettings else diskSettings
-
-        val mergedWhitelist = (diskSettings.whitelistedPackages + liveSettings.whitelistedPackages)
-            .filter { it.isNotBlank() }
-            .distinct()
-            .sorted()
-        val mergedBlocked = (diskSettings.blockedPackages + liveSettings.blockedPackages)
-            .filter { it.isNotBlank() }
-            .distinct()
-            .sorted()
-        val resolvedApiKey = baseSettings.geminiApiKey.ifBlank { otherSettings.geminiApiKey }
-        val resolvedSettingsTimestamp = maxOf(liveSettings.settingsUpdatedAt, diskSettings.settingsUpdatedAt)
-
-        val mergedSettings = baseSettings.copy(
-            whitelistedPackages = mergedWhitelist,
-            blockedPackages = mergedBlocked,
-            geminiApiKey = resolvedApiKey,
-            strictBlockerEnabled = if (useDiskSettings) {
-                diskSettings.strictBlockerEnabled
-            } else {
-                liveSettings.strictBlockerEnabled
-            },
-            settingsUpdatedAt = resolvedSettingsTimestamp
+        val mergedForest = mergeForestState(
+            live = live.forestState,
+            disk = existingDisk.forestState,
+            mergedSessions = mergedSessions,
+            deletedIds = deleted
         )
 
-        // 7. Progress & Gamification (Max / Cumulative Preservation)
-        val mergedPlantedHistory = (live.forestState.plantedHistory + existingDisk.forestState.plantedHistory)
-            .filterNot { it.id in localDeletedIds }
-            .distinctBy { it.id }
-            .sortedByDescending { it.plantedAtEpochMillis }
-        val mergedUnlockedSpecies = (live.forestState.unlockedSpecies + existingDisk.forestState.unlockedSpecies)
-            .distinct()
-        val mergedSunlightPoints = maxOf(live.forestState.sunlightPoints, existingDisk.forestState.sunlightPoints)
-        val mergedGrowthMinutes = maxOf(
-            live.forestState.currentGrowthMinutes,
-            existingDisk.forestState.currentGrowthMinutes
-        )
-        val (computedCurrentStreak, computedBestStreak) = computeDailyStreaks(mergedRecords)
-        val mergedCurrentStreak = maxOf(
-            computedCurrentStreak,
-            live.forestState.currentDailyStreak,
-            existingDisk.forestState.currentDailyStreak
-        )
-        val mergedBestStreak = maxOf(
-            computedBestStreak,
-            live.forestState.bestDailyStreak,
-            existingDisk.forestState.bestDailyStreak,
-            mergedCurrentStreak
-        )
-        val resolvedActiveSpecies = when {
-            useDiskSettings -> existingDisk.forestState.activeSpecies
-            live.forestState.activeSpecies != PlantSpecies.PINE -> live.forestState.activeSpecies
-            else -> existingDisk.forestState.activeSpecies
-        }.let { sp -> if (sp in mergedUnlockedSpecies) sp else PlantSpecies.PINE }
-
-        val mergedForest = live.forestState.copy(
-            sunlightPoints = mergedSunlightPoints,
-            currentGrowthMinutes = mergedGrowthMinutes,
-            activeSpecies = resolvedActiveSpecies,
-            unlockedSpecies = mergedUnlockedSpecies,
-            plantedHistory = mergedPlantedHistory,
-            currentDailyStreak = mergedCurrentStreak,
-            bestDailyStreak = mergedBestStreak
+        val mergedSettings = mergeSettings(live.settings, existingDisk.settings)
+        val mergedPrefs = mergeSharedPreferencesSnapshots(
+            livePrefs = live.allPreferences,
+            diskPrefs = existingDisk.allPreferences,
+            preferDiskSettings = shouldInheritDiskSettings(live.settings, existingDisk.settings)
         )
 
-        // 8. Merge allPreferences maps (winning settings side wins key collisions)
-        val mergedAllPrefs = mergePreferenceMaps(
-            primary = if (useDiskSettings) existingDisk.allPreferences else live.allPreferences,
-            secondary = if (useDiskSettings) live.allPreferences else existingDisk.allPreferences
-        )
+        val mergedPersistedTimer = live.persistedTimer ?: existingDisk.persistedTimer
 
         return live.copy(
             backupVersion = 4,
@@ -344,33 +130,318 @@ object BackupSmartMerger {
             projects = mergedProjects,
             folders = mergedFolders,
             tags = mergedTags,
-            focusRecords = mergedRecords,
-            pomodoroSessions = mergedRecords,
+            focusRecords = mergedSessions,
+            pomodoroSessions = mergedSessions,
             settings = mergedSettings,
-            allPreferences = mergedAllPrefs,
+            allPreferences = mergedPrefs,
             forestState = mergedForest,
-            persistedTimer = live.persistedTimer ?: existingDisk.persistedTimer,
-            deletedIds = localDeletedIds.sorted()
+            persistedTimer = mergedPersistedTimer,
+            deletedIds = emptyList()
         )
     }
 
-    private fun mergePreferenceMaps(
-        primary: Map<String, List<ExportedPrefEntry>>,
-        secondary: Map<String, List<ExportedPrefEntry>>
+    private fun mergeTasks(
+        liveTasks: List<TaskItem>,
+        diskTasks: List<TaskItem>,
+        deletedIds: Set<String>
+    ): List<TaskItem> {
+        val map = linkedMapOf<String, TaskItem>()
+
+        for (task in diskTasks) {
+            if (task.id in deletedIds) continue
+            map[task.id] = task.copy(
+                subtasks = task.subtasks.filterNot { it.id in deletedIds }
+            )
+        }
+
+        for (task in liveTasks) {
+            if (task.id in deletedIds) continue
+            val existing = map[task.id]
+            if (existing == null) {
+                map[task.id] = task.copy(
+                    subtasks = task.subtasks.filterNot { it.id in deletedIds }
+                )
+            } else {
+                val winner = if (task.updatedAtEpochMillis >= existing.updatedAtEpochMillis) task else existing
+                val mergedSubtasks = mergeSubtasks(
+                    liveSubs = task.subtasks,
+                    diskSubs = existing.subtasks,
+                    deletedIds = deletedIds
+                )
+                map[task.id] = winner.copy(
+                    subtasks = mergedSubtasks,
+                    completedPomodoros = maxOf(task.completedPomodoros, existing.completedPomodoros),
+                    elapsedFocusMinutes = maxOf(task.elapsedFocusMinutes, existing.elapsedFocusMinutes)
+                )
+            }
+        }
+
+        return map.values.toList()
+    }
+
+    private fun mergeSubtasks(
+        liveSubs: List<SubtaskItem>,
+        diskSubs: List<SubtaskItem>,
+        deletedIds: Set<String>
+    ): List<SubtaskItem> {
+        val map = linkedMapOf<String, SubtaskItem>()
+        for (sub in diskSubs) {
+            if (sub.id in deletedIds) continue
+            map[sub.id] = sub
+        }
+        for (sub in liveSubs) {
+            if (sub.id in deletedIds) continue
+            val existing = map[sub.id]
+            if (existing == null || sub.updatedAt >= existing.updatedAt) {
+                map[sub.id] = sub
+            }
+        }
+        return map.values.sortedBy { it.sortOrder }
+    }
+
+    private fun mergeProjects(
+        liveProjects: List<ProjectItem>,
+        diskProjects: List<ProjectItem>,
+        deletedIds: Set<String>
+    ): List<ProjectItem> {
+        val map = linkedMapOf<String, ProjectItem>()
+        for (proj in diskProjects) {
+            if (proj.id in deletedIds) continue
+            map[proj.id] = proj
+        }
+        for (proj in liveProjects) {
+            if (proj.id in deletedIds) continue
+            val existing = map[proj.id]
+            if (existing == null || proj.updatedAt >= existing.updatedAt) {
+                map[proj.id] = proj
+            }
+        }
+        return map.values.sortedBy { it.sortOrder }
+    }
+
+    private fun mergeFolders(
+        liveFolders: List<FolderItem>,
+        diskFolders: List<FolderItem>,
+        deletedIds: Set<String>
+    ): List<FolderItem> {
+        val map = linkedMapOf<String, FolderItem>()
+        for (folder in diskFolders) {
+            if (folder.id in deletedIds) continue
+            map[folder.id] = folder
+        }
+        for (folder in liveFolders) {
+            if (folder.id in deletedIds) continue
+            val existing = map[folder.id]
+            if (existing == null || folder.updatedAt >= existing.updatedAt) {
+                map[folder.id] = folder
+            }
+        }
+        return map.values.sortedBy { it.sortOrder }
+    }
+
+    private fun mergeTags(
+        liveTags: List<TagItem>,
+        diskTags: List<TagItem>,
+        deletedIds: Set<String>
+    ): List<TagItem> {
+        val map = linkedMapOf<String, TagItem>()
+        for (tag in diskTags) {
+            if (tag.id in deletedIds) continue
+            map[tag.id] = tag
+        }
+        for (tag in liveTags) {
+            if (tag.id in deletedIds) continue
+            val existing = map[tag.id]
+            if (existing == null || tag.updatedAt >= existing.updatedAt) {
+                map[tag.id] = tag
+            }
+        }
+        return map.values.toList()
+    }
+
+    private fun mergeFocusRecords(
+        liveRecords: List<FocusRecord>,
+        diskRecords: List<FocusRecord>,
+        deletedIds: Set<String>
+    ): List<FocusRecord> {
+        val map = linkedMapOf<String, FocusRecord>()
+        for (rec in diskRecords) {
+            if (rec.id in deletedIds) continue
+            map[rec.id] = rec
+        }
+        for (rec in liveRecords) {
+            if (rec.id in deletedIds) continue
+            val existing = map[rec.id]
+            if (existing == null || rec.endTimeEpochMillis >= existing.endTimeEpochMillis) {
+                map[rec.id] = rec
+            }
+        }
+        return map.values.sortedByDescending { it.startedAtEpochMillis }
+    }
+
+    private fun mergeForestState(
+        live: ForestState,
+        disk: ForestState,
+        mergedSessions: List<FocusRecord>,
+        deletedIds: Set<String>
+    ): ForestState {
+        val treesMap = linkedMapOf<String, PlantedTree>()
+        for (tree in disk.plantedHistory) {
+            if (tree.id !in deletedIds) treesMap[tree.id] = tree
+        }
+        for (tree in live.plantedHistory) {
+            if (tree.id !in deletedIds) treesMap[tree.id] = tree
+        }
+        val mergedTrees = treesMap.values.sortedByDescending { it.plantedAtEpochMillis }
+        val mergedSpecies = (disk.unlockedSpecies + live.unlockedSpecies + listOf(PlantSpecies.PINE)).distinct()
+
+        val (computedCurrentStreak, computedBestStreak) = computeDailyStreaks(mergedSessions)
+        val mergedBestStreak = maxOf(
+            computedBestStreak,
+            computedCurrentStreak,
+            live.bestDailyStreak,
+            disk.bestDailyStreak
+        )
+        val mergedCurrentStreak = maxOf(
+            computedCurrentStreak,
+            live.currentDailyStreak,
+            disk.currentDailyStreak
+        )
+
+        val chosenActiveSpecies = if (live.activeSpecies != PlantSpecies.PINE) {
+            live.activeSpecies
+        } else if (disk.activeSpecies != PlantSpecies.PINE) {
+            disk.activeSpecies
+        } else {
+            live.activeSpecies
+        }
+
+        return ForestState(
+            sunlightPoints = maxOf(live.sunlightPoints, disk.sunlightPoints),
+            currentGrowthMinutes = maxOf(live.currentGrowthMinutes, disk.currentGrowthMinutes),
+            activeSpecies = if (chosenActiveSpecies in mergedSpecies) chosenActiveSpecies else PlantSpecies.PINE,
+            unlockedSpecies = mergedSpecies,
+            plantedHistory = mergedTrees,
+            currentDailyStreak = mergedCurrentStreak,
+            bestDailyStreak = mergedBestStreak
+        )
+    }
+
+    private fun shouldInheritDiskSettings(live: AppSettings, disk: AppSettings): Boolean {
+        val liveUnmodified = live.settingsUpdatedAt == 0L && areSettingsDefaultUnmodified(
+            live.copy(
+                whitelistedPackages = emptyList(),
+                blockedPackages = emptyList()
+            )
+        )
+        val diskHasUserSettings = disk.settingsUpdatedAt > 0L || !areSettingsDefaultUnmodified(disk)
+        if (liveUnmodified && diskHasUserSettings) return true
+        return disk.settingsUpdatedAt > live.settingsUpdatedAt
+    }
+
+    private fun mergeSettings(live: AppSettings, disk: AppSettings): AppSettings {
+        val preferDisk = shouldInheritDiskSettings(live, disk)
+        val primary = if (preferDisk) disk else live
+        val secondary = if (preferDisk) live else disk
+
+        val unionWhitelist = (disk.whitelistedPackages + live.whitelistedPackages)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .sorted()
+        val unionBlocked = (disk.blockedPackages + live.blockedPackages)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .sorted()
+
+        val resolvedApiKey = primary.geminiApiKey.ifBlank { secondary.geminiApiKey }
+        val resolvedModelId = primary.geminiModelId.ifBlank {
+            secondary.geminiModelId.ifBlank { "gemini-2.5-flash" }
+        }
+        val resolvedAccent = primary.accentColorHex.ifBlank {
+            secondary.accentColorHex.ifBlank { "#E05246" }
+        }
+
+        return primary.copy(
+            accentColorHex = resolvedAccent,
+            whitelistedPackages = unionWhitelist,
+            blockedPackages = unionBlocked,
+            geminiApiKey = resolvedApiKey,
+            geminiModelId = resolvedModelId,
+            settingsUpdatedAt = maxOf(live.settingsUpdatedAt, disk.settingsUpdatedAt)
+        )
+    }
+
+    private fun mergeSharedPreferencesSnapshots(
+        livePrefs: Map<String, List<ExportedPrefEntry>>,
+        diskPrefs: Map<String, List<ExportedPrefEntry>>,
+        preferDiskSettings: Boolean
     ): Map<String, List<ExportedPrefEntry>> {
-        if (primary.isEmpty()) return secondary
-        if (secondary.isEmpty()) return primary
         val result = linkedMapOf<String, List<ExportedPrefEntry>>()
-        val allNames = (primary.keys + secondary.keys).distinct()
+        val allNames = (diskPrefs.keys + livePrefs.keys).distinct()
         for (name in allNames) {
-            val secMap = secondary[name].orEmpty().associateBy { it.key }
-            val priMap = primary[name].orEmpty().associateBy { it.key }
-            val combined = LinkedHashMap<String, ExportedPrefEntry>(secMap)
-            combined.putAll(priMap)
-            if (combined.isNotEmpty()) {
-                result[name] = combined.values.sortedBy { it.key }
+            val map = linkedMapOf<String, ExportedPrefEntry>()
+            val first = if (preferDiskSettings) livePrefs[name].orEmpty() else diskPrefs[name].orEmpty()
+            val second = if (preferDiskSettings) diskPrefs[name].orEmpty() else livePrefs[name].orEmpty()
+            first.forEach { map[it.key] = it }
+            second.forEach { map[it.key] = it }
+            if (map.isNotEmpty()) {
+                result[name] = map.values.sortedBy { it.key }
             }
         }
         return result
+    }
+
+    /**
+     * Computes (currentDailyStreak, bestDailyStreak) in consecutive days from the combined focus session history.
+     */
+    fun computeDailyStreaks(sessions: List<FocusRecord>): Pair<Int, Int> {
+        if (sessions.isEmpty()) return 0 to 0
+
+        val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH)
+        val uniqueDays = sessions.mapNotNull { rec ->
+            if (rec.startedAtEpochMillis > 0L) {
+                DateUtils.epochDayFromMillis(rec.startedAtEpochMillis)
+            } else if (rec.dateKey.isNotBlank()) {
+                try {
+                    val d: Date? = dateFmt.parse(rec.dateKey)
+                    d?.let { DateUtils.epochDayFromMillis(it.time) }
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+        }.distinct().sorted()
+
+        if (uniqueDays.isEmpty()) return 0 to 0
+
+        var best = 1
+        var run = 1
+        for (i in 1 until uniqueDays.size) {
+            if (uniqueDays[i] == uniqueDays[i - 1] + 1L) {
+                run++
+                if (run > best) best = run
+            } else {
+                run = 1
+            }
+        }
+
+        val today = DateUtils.todayEpochDay()
+        val lastDay = uniqueDays.last()
+        val current = if (lastDay == today || lastDay == today - 1L) {
+            var c = 1
+            var idx = uniqueDays.size - 1
+            while (idx > 0 && uniqueDays[idx] == uniqueDays[idx - 1] + 1L) {
+                c++
+                idx--
+            }
+            c
+        } else {
+            0
+        }
+
+        return current to maxOf(best, current)
     }
 }

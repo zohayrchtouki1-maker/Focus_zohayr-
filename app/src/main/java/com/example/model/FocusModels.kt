@@ -80,7 +80,7 @@ data class SubtaskItem(
     val parentTaskId: String? = null,
     val sortOrder: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = 0L
+    val updatedAt: Long = createdAt
 )
 
 @JsonClass(generateAdapter = true)
@@ -91,7 +91,7 @@ data class ExportedSubtaskItem(
     val isCompleted: Boolean,
     val sortOrder: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = 0L
+    val updatedAt: Long = createdAt
 )
 
 @JsonClass(generateAdapter = true)
@@ -126,7 +126,7 @@ data class FolderItem(
     val isExpanded: Boolean = true,
     val sortOrder: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = 0L
+    val updatedAt: Long = createdAt
 )
 
 @JsonClass(generateAdapter = true)
@@ -148,7 +148,7 @@ data class TagItem(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
     val colorHex: String = "#3B7BF6",
-    val updatedAt: Long = 0L
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @JsonClass(generateAdapter = true)
@@ -273,14 +273,6 @@ data class AppBackupState(
     val deletedIds: List<String> = emptyList()
 )
 
-data class PendingBackupRestorePrompt(
-    val backupState: AppBackupState,
-    val tasksCount: Int,
-    val sessionsCount: Int,
-    val projectsCount: Int,
-    val filePath: String
-)
-
 data class ManualBackupExportSummary(
     val fileName: String,
     val fileSizeBytes: Long,
@@ -292,4 +284,12 @@ data class ManualBackupExportSummary(
     val totalPrefsCount: Int,
     val updatedTimestamp: String = "",
     val mergedState: AppBackupState? = null
+)
+
+data class PendingBackupRestorePrompt(
+    val backupState: AppBackupState,
+    val tasksCount: Int,
+    val sessionsCount: Int,
+    val projectsCount: Int,
+    val filePath: String
 )

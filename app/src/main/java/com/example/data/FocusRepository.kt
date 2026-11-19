@@ -16,7 +16,6 @@ import com.example.model.AppSettings
 import com.example.model.ExportedFocusStats
 import com.example.model.ExportedPrefEntry
 import com.example.model.ExportedSubtaskItem
-import com.example.model.FocusRecord
 import com.example.model.ManualBackupExportSummary
 import com.example.model.PendingBackupRestorePrompt
 import com.example.model.SubtaskItem
@@ -367,8 +366,14 @@ class FocusRepository(private val context: Context) {
                 existingDisk = existingExternal,
                 localDeletedIds = localDeletedIds
             )
-            // Restore any newly inherited preferences/AI/blocker settings into local SharedPreferences
-            syncMergedSettingsToDevicePrefs(merged)
+            if (merged.settings != normalizedLive.settings) {
+                syncMergedSettingsToDevicePrefs(
+                    previousLive = normalizedLive.settings,
+                    mergedSettings = merged.settings
+                )
+            } else {
+                syncSettingsToExplicitPreferences(normalizedLive.settings)
+            }
             normalizeLoadedState(merged, reconcileWithLocalPrefs = false)
         } else {
             syncSettingsToExplicitPreferences(normalizedLive.settings)
@@ -387,24 +392,32 @@ class FocusRepository(private val context: Context) {
         return enriched
     }
 
-    private fun syncMergedSettingsToDevicePrefs(merged: AppBackupState) {
-        if (merged.allPreferences.isNotEmpty()) {
-            restoreAllSharedPreferencesFromSnapshot(merged.allPreferences)
-        }
-        syncSettingsToExplicitPreferences(merged.settings)
+    private fun syncMergedSettingsToDevicePrefs(
+        previousLive: AppSettings,
+        mergedSettings: AppSettings
+    ) {
+        syncSettingsToExplicitPreferences(mergedSettings)
         try {
-            StrictAppBlockerManager.setStrictBlockerEnabled(context, merged.settings.strictBlockerEnabled)
-            StrictAppBlockerManager.setWhitelistedPackages(context, merged.settings.whitelistedPackages.toSet())
+            if (mergedSettings.strictBlockerEnabled != previousLive.strictBlockerEnabled) {
+                StrictAppBlockerManager.setStrictBlockerEnabled(context, mergedSettings.strictBlockerEnabled)
+            }
+            if (mergedSettings.whitelistedPackages != previousLive.whitelistedPackages) {
+                StrictAppBlockerManager.setWhitelistedPackages(context, mergedSettings.whitelistedPackages.toSet())
+            }
         } catch (_: Exception) {
         }
         try {
-            if (merged.settings.geminiApiKey.isNotBlank()) {
-                TomatoAiService.saveApiKey(context, merged.settings.geminiApiKey)
+            if (mergedSettings.geminiApiKey.isNotBlank() &&
+                mergedSettings.geminiApiKey != previousLive.geminiApiKey
+            ) {
+                TomatoAiService.saveApiKey(context, mergedSettings.geminiApiKey)
             }
-            if (merged.settings.geminiModelId.isNotBlank()) {
+            if (mergedSettings.geminiModelId.isNotBlank() &&
+                mergedSettings.geminiModelId != previousLive.geminiModelId
+            ) {
                 TomatoAiService.saveSelectedModel(
                     context,
-                    TomatoGeminiModel.fromModelId(merged.settings.geminiModelId)
+                    TomatoGeminiModel.fromModelId(mergedSettings.geminiModelId)
                 )
             }
         } catch (_: Exception) {
@@ -759,7 +772,12 @@ class FocusRepository(private val context: Context) {
                         existingDisk = existingExternal,
                         localDeletedIds = localDeletedIds
                     )
-                    syncMergedSettingsToDevicePrefs(merged)
+                    if (merged.settings != normalizedLive.settings) {
+                        syncMergedSettingsToDevicePrefs(
+                            previousLive = normalizedLive.settings,
+                            mergedSettings = merged.settings
+                        )
+                    }
                     merged
                 } else {
                     normalizedLive
@@ -842,7 +860,27 @@ class FocusRepository(private val context: Context) {
                 )
                 BackupImportMode.REPLACE -> normalizedImported
             }
-            syncMergedSettingsToDevicePrefs(targetState)
+            if (targetState.allPreferences.isNotEmpty()) {
+                restoreAllSharedPreferencesFromSnapshot(targetState.allPreferences)
+            }
+            syncSettingsToExplicitPreferences(targetState.settings)
+            try {
+                StrictAppBlockerManager.setStrictBlockerEnabled(context, targetState.settings.strictBlockerEnabled)
+                StrictAppBlockerManager.setWhitelistedPackages(context, targetState.settings.whitelistedPackages.toSet())
+            } catch (_: Exception) {
+            }
+            try {
+                if (targetState.settings.geminiApiKey.isNotBlank()) {
+                    TomatoAiService.saveApiKey(context, targetState.settings.geminiApiKey)
+                }
+                if (targetState.settings.geminiModelId.isNotBlank()) {
+                    TomatoAiService.saveSelectedModel(
+                        context,
+                        TomatoGeminiModel.fromModelId(targetState.settings.geminiModelId)
+                    )
+                }
+            } catch (_: Exception) {
+            }
             val finalState = normalizeLoadedState(targetState, reconcileWithLocalPrefs = false)
             latestKnownState = finalState
             saveStateInternal(
@@ -1026,8 +1064,6 @@ class FocusRepository(private val context: Context) {
     }
 
     private fun tryWriteDirectlyToPublicFolder(fileName: String, bytes: ByteArray): File? {
-        // On Android 11+, attempt direct public File write when MANAGE_EXTERNAL_STORAGE is granted
-        // or when the directory is writable (e.g. Robolectric JVM tests)
         return try {
             val targetDir = getPublicBackupDirectory()
             if (!targetDir.exists()) {

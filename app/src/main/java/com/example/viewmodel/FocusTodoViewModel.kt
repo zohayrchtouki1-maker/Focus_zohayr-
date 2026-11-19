@@ -55,8 +55,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -116,6 +119,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     private val appContext = application.applicationContext
     private val repository = FocusRepository(appContext)
     private val soundSynthesizer = SoundSynthesizer()
+    private val saveMutex = Mutex()
+    private val commitGeneration = AtomicLong(0L)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -267,20 +272,35 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     )
 
     private fun commitData(transform: (AppBackupState) -> AppBackupState) {
-        var snapshotToSave: AppBackupState? = null
         _uiState.update { state ->
-            val nextData = transform(state.data).copy(
+            val transformed = transform(state.data)
+            val normalizedSettings = if (transformed.settings != state.data.settings) {
+                val monotonicTs = maxOf(
+                    System.currentTimeMillis(),
+                    state.data.settings.settingsUpdatedAt + 1L,
+                    transformed.settings.settingsUpdatedAt
+                )
+                transformed.settings.copy(settingsUpdatedAt = monotonicTs)
+            } else {
+                transformed.settings
+            }
+            val nextData = transformed.copy(
+                settings = normalizedSettings,
                 persistedTimer = state.timer.toPersisted()
             )
-            snapshotToSave = nextData
             state.copy(data = nextData)
         }
-        val toSave = snapshotToSave ?: return
+        val myGen = commitGeneration.incrementAndGet()
         viewModelScope.launch {
-            val saveRes = repository.saveState(toSave)
-            val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
-            val mergedFromDisk = saveRes.getOrNull()
-            absorbMergedBackupStateIfExpanded(mergedFromDisk, updatedBackupTs)
+            saveMutex.withLock {
+                val latestToSave = _uiState.value.data
+                val saveRes = repository.saveState(latestToSave)
+                val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
+                if (commitGeneration.get() == myGen) {
+                    val mergedFromDisk = saveRes.getOrNull()
+                    absorbMergedBackupStateIfExpanded(mergedFromDisk, updatedBackupTs)
+                }
+            }
         }
     }
 
@@ -373,10 +393,16 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             it.copy(data = nextData)
         }
         syncStrictBlockerTimerState()
+        val myGen = commitGeneration.incrementAndGet()
         viewModelScope.launch {
-            val saveRes = repository.saveState(nextData)
-            val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
-            absorbMergedBackupStateIfExpanded(saveRes.getOrNull(), updatedBackupTs)
+            saveMutex.withLock {
+                val latestToSave = _uiState.value.data
+                val saveRes = repository.saveState(latestToSave)
+                val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
+                if (commitGeneration.get() == myGen) {
+                    absorbMergedBackupStateIfExpanded(saveRes.getOrNull(), updatedBackupTs)
+                }
+            }
         }
     }
 

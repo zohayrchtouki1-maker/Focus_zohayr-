@@ -73,18 +73,14 @@ fun AllFilesAccessPermissionDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Security,
+                        imageVector = Icons.Default.FolderOpen,
                         contentDescription = null,
                         tint = CoralPrimary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(22.dp)
                     )
                 }
                 Text(
-                    text = if (isArabic) {
-                        "إذن الوصول إلى جميع الملفات"
-                    } else {
-                        "All Files Access Permission"
-                    },
+                    text = if (isArabic) "صلاحية الوصول إلى جميع الملفات" else "All Files Access Permission",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     color = DarkTextPrimary
@@ -95,38 +91,27 @@ fun AllFilesAccessPermissionDialog(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     text = if (isArabic) {
-                        "امنح FocusTomato إذن الوصول إلى جميع الملفات لحفظ واستعادة النسخة الاحتياطية بشكل دائم حتى بعد حذف التطبيق وإعادة تثبيته، وبدمج ذكي بدون تكرار للملفات."
+                        "امنح تطبيق FocusTomato صلاحية الوصول إلى جميع الملفات لحفظ واستعادة نسختك الاحتياطية تلقائياً حتى بعد حذف التطبيق أو إعادة تثبيته دون فقدان أي بيانات."
                     } else {
-                        "Grant FocusTomato All Files Access so your local backup survives app uninstalls and reinstalls with Full-State Smart Merge and zero duplicate files."
+                        "Grant All Files Access so FocusTomato can persistently read, smart-merge, and restore your local backup across app uninstalls and reinstalls without losing any data."
                     },
                     fontSize = 13.sp,
                     lineHeight = 20.sp,
                     color = DarkTextSecondary
                 )
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(10.dp),
                     color = DarkSurfaceVariant,
                     border = BorderStroke(1.dp, DarkOutline),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    Text(
+                        text = "${FocusRepository.BACKUP_DISPLAY_PATH}/${FocusRepository.MASTER_BACKUP_FILE_NAME}",
+                        fontSize = 11.sp,
+                        fontFamily = JetBrainsMonoFontFamily,
+                        color = ForestEmerald,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.FolderOpen,
-                            contentDescription = null,
-                            tint = CoralPrimary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "${FocusRepository.BACKUP_DISPLAY_PATH}/${FocusRepository.MASTER_BACKUP_FILE_NAME}",
-                            fontSize = 11.sp,
-                            fontFamily = JetBrainsMonoFontFamily,
-                            color = DarkTextPrimary
-                        )
-                    }
+                    )
                 }
             }
         },
@@ -139,14 +124,15 @@ fun AllFilesAccessPermissionDialog(
                     contentColor = Color.White
                 ),
                 modifier = Modifier
-                    .fillMaxWidth()
                     .height(48.dp)
                     .testTag("grant_all_files_access_button")
             ) {
+                Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (isArabic) "فتح إعدادات الوصول للملفات" else "Grant All Files Access",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
+                    text = if (isArabic) "منح الصلاحية الآن" else "Grant Access",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
                 )
             }
         },
@@ -159,8 +145,8 @@ fun AllFilesAccessPermissionDialog(
             ) {
                 Text(
                     text = if (isArabic) "لاحقاً" else "Later",
-                    fontSize = 13.sp,
-                    color = DarkTextSecondary
+                    color = DarkTextSecondary,
+                    fontSize = 13.sp
                 )
             }
         }
@@ -179,7 +165,7 @@ fun FreshInstallAutoRestoreDialog(
         shape = RoundedCornerShape(16.dp),
         containerColor = DarkSurface,
         modifier = Modifier
-            .border(1.2.dp, ForestEmerald.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+            .border(1.2.dp, ForestEmerald.copy(alpha = 0.75f), RoundedCornerShape(16.dp))
             .testTag("fresh_install_auto_restore_dialog"),
         title = {
             Row(
@@ -188,7 +174,7 @@ fun FreshInstallAutoRestoreDialog(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(40.dp)
                         .clip(CircleShape)
                         .background(ForestEmerald.copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center
@@ -197,106 +183,91 @@ fun FreshInstallAutoRestoreDialog(
                         imageVector = Icons.Default.Restore,
                         contentDescription = null,
                         tint = ForestEmerald,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(22.dp)
                     )
                 }
                 Text(
-                    text = if (isArabic) {
-                        "تم العثور على نسخة احتياطية"
-                    } else {
-                        "Existing Backup Found"
-                    },
+                    text = if (isArabic) "تم العثور على نسخة احتياطية" else "Existing Backup Found",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
-                    color = ForestEmerald
+                    color = DarkTextPrimary
                 )
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     text = if (isArabic) {
-                        "تم العثور على نسخة احتياطية موجودة على جهازك (${prompt.tasksCount} مهام، ${prompt.sessionsCount} جلسات). هل تريد استعادة كل شيء الآن؟"
+                        "تم العثور على نسخة احتياطية على جهازك (${prompt.tasksCount} مهام، ${prompt.sessionsCount} جلسات). هل تريد استعادة كل شيء الآن؟"
                     } else {
                         "Existing backup found on your device (${prompt.tasksCount} tasks, ${prompt.sessionsCount} sessions). Restore everything now?"
                     },
                     fontSize = 14.sp,
                     lineHeight = 21.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = DarkTextPrimary
+                    color = DarkTextPrimary,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = if (isArabic) {
+                        "تم إيقاف النسخ التلقائي مؤقتاً لحماية بياناتك القديمة من الاستبدال. عند اختيار الاستعادة سيتم استرجاع جميع المهام والإحصائيات وتقدم الشجرة والألوان وإعدادات المؤقت وحظر التطبيقات فوراً."
+                    } else {
+                        "Auto-backup is paused to protect your existing data. Choosing Restore All will immediately restore all tasks, stats, tree progress, colors, timer settings, and app blocker rules."
+                    },
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                    color = DarkTextSecondary
                 )
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(10.dp),
                     color = DarkSurfaceVariant,
                     border = BorderStroke(1.dp, DarkOutline),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    Text(
+                        text = prompt.filePath,
+                        fontSize = 11.sp,
+                        fontFamily = JetBrainsMonoFontFamily,
+                        color = ForestEmerald,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.FolderOpen,
-                            contentDescription = null,
-                            tint = ForestEmerald,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = prompt.filePath,
-                            fontSize = 11.sp,
-                            fontFamily = JetBrainsMonoFontFamily,
-                            color = DarkTextSecondary
-                        )
-                    }
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = onRestoreAll,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = CoralPrimary,
-                            contentColor = Color.White
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("restore_all_backup_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Restore,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (isArabic) "استعادة الكل (Restore All)" else "Restore All",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    OutlinedButton(
-                        onClick = onStartFresh,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = DarkSurfaceVariant,
-                            contentColor = DarkTextPrimary
-                        ),
-                        border = BorderStroke(1.dp, DarkOutline),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("start_fresh_backup_button")
-                    ) {
-                        Text(
-                            text = if (isArabic) "البدء من جديد (Start Fresh)" else "Start Fresh",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    )
                 }
             }
         },
-        confirmButton = {}
+        confirmButton = {
+            Button(
+                onClick = onRestoreAll,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ForestEmerald,
+                    contentColor = Color.White
+                ),
+                modifier = Modifier
+                    .height(48.dp)
+                    .testTag("restore_all_backup_button")
+            ) {
+                Text(
+                    text = if (isArabic) "استعادة الكل" else "Restore All",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = onStartFresh,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, DarkOutline),
+                modifier = Modifier
+                    .height(48.dp)
+                    .testTag("start_fresh_backup_button")
+            ) {
+                Text(
+                    text = if (isArabic) "البدء من جديد" else "Start Fresh",
+                    color = DarkTextSecondary,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp
+                )
+            }
+        }
     )
 }
