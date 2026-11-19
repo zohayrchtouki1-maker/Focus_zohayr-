@@ -7,6 +7,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import com.example.ai.TomatoAiService
+import com.example.ai.TomatoGeminiModel
+import com.example.blocker.StrictAppBlockerManager
 import com.example.model.AppBackupState
 import com.example.model.AppLanguage
 import com.example.model.AppSettings
@@ -15,9 +18,11 @@ import com.example.model.ExportedPrefEntry
 import com.example.model.ExportedSubtaskItem
 import com.example.model.FocusRecord
 import com.example.model.ManualBackupExportSummary
+import com.example.model.PendingBackupRestorePrompt
 import com.example.model.SubtaskItem
 import com.example.model.WhiteNoiseType
 import com.example.notifications.FocusNotificationManager
+import com.example.notifications.SystemPermissionsHelper
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +30,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -42,16 +48,34 @@ class FocusRepository(private val context: Context) {
         private const val PREFS_STATE_KEY = "focus_todo_state_json"
         const val PREFS_LAST_AUTO_BACKUP_TIME = "last_auto_backup_time"
 
-        const val BACKUP_FOLDER_NAME = "Focus_Zohayr"
-        const val BACKUP_DISPLAY_PATH = "Documents/Focus_Zohayr"
-        const val MASTER_BACKUP_FILE_NAME = "focus_zohayr_backup.json"
+        const val BACKUP_FOLDER_NAME = "FocusTomato"
+        const val BACKUP_DISPLAY_PATH = "Documents/FocusTomato"
+        const val MASTER_BACKUP_FILE_NAME = "FocusTomato_backup.json"
         const val AUTO_BACKUP_FILE_NAME = MASTER_BACKUP_FILE_NAME
+        const val PUBLIC_BACKUP_ABSOLUTE_PATH = "/storage/emulated/0/Documents/FocusTomato/FocusTomato_backup.json"
+
         private const val LEGACY_AUTO_BACKUP_FILE_NAME = "focus_zohayr_auto_backup.json"
         private const val PREFS_MASTER_BACKUP_URI = "master_backup_mediastore_uri"
+        private const val PREFS_LOCAL_DELETED_IDS = "local_soft_deleted_ids"
+        private const val PREFS_START_FRESH_CHOSEN = "fresh_install_start_fresh_chosen"
+
+        private val LOCAL_ONLY_PREF_KEYS = setOf(
+            PREFS_STATE_KEY,
+            PREFS_MASTER_BACKUP_URI,
+            PREFS_LOCAL_DELETED_IDS,
+            PREFS_START_FRESH_CHOSEN
+        )
 
         private val backupMutex = Mutex()
         @Volatile
         private var latestKnownState: AppBackupState? = null
+        @Volatile
+        private var autoBackupPaused: Boolean = false
+
+        fun resetStaticCacheForTests() {
+            latestKnownState = null
+            autoBackupPaused = false
+        }
 
         fun formatBackupTimestamp(epochMillis: Long, isArabic: Boolean = true): String {
             if (epochMillis <= 0L) {
@@ -82,14 +106,164 @@ class FocusRepository(private val context: Context) {
         return prefs.getLong(PREFS_LAST_AUTO_BACKUP_TIME, 0L)
     }
 
+    fun isAutoBackupPaused(): Boolean = autoBackupPaused
+
+    fun setAutoBackupPaused(paused: Boolean) {
+        autoBackupPaused = paused
+    }
+
+    fun wasStartFreshChosen(): Boolean = prefs.getBoolean(PREFS_START_FRESH_CHOSEN, false)
+
+    fun markStartFreshChosen(chosen: Boolean) {
+        prefs.edit().putBoolean(PREFS_START_FRESH_CHOSEN, chosen).commit()
+    }
+
+    // --- Soft-Delete Tombstones (Local Install Only) ---
+
+    fun getLocalDeletedIds(): Set<String> {
+        return prefs.getStringSet(PREFS_LOCAL_DELETED_IDS, emptySet())
+            .orEmpty()
+            .filter { it.isNotBlank() }
+            .toSet()
+    }
+
+    fun recordDeletedIds(ids: Collection<String>) {
+        val clean = ids.filter { it.isNotBlank() }
+        if (clean.isEmpty()) return
+        val updated = getLocalDeletedIds() + clean
+        prefs.edit().putStringSet(PREFS_LOCAL_DELETED_IDS, updated).commit()
+    }
+
+    fun removeDeletedIds(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        val current = getLocalDeletedIds()
+        val updated = current - ids.toSet()
+        if (updated.size != current.size) {
+            prefs.edit().putStringSet(PREFS_LOCAL_DELETED_IDS, updated).commit()
+        }
+    }
+
+    fun clearLocalDeletedIds() {
+        prefs.edit().remove(PREFS_LOCAL_DELETED_IDS).commit()
+    }
+
+    // --- Public Storage File Helpers ---
+
+    fun getPublicBackupDirectory(): File {
+        val publicDocs = try {
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+        } catch (_: Exception) {
+            null
+        }
+        return if (publicDocs != null) {
+            File(publicDocs, BACKUP_FOLDER_NAME)
+        } else {
+            File("/storage/emulated/0/Documents/$BACKUP_FOLDER_NAME")
+        }
+    }
+
+    fun getPublicBackupFile(): File {
+        return File(getPublicBackupDirectory(), MASTER_BACKUP_FILE_NAME)
+    }
+
+    fun isAppStateEffectivelyEmpty(state: AppBackupState): Boolean {
+        return BackupSmartMerger.isAppStateEffectivelyEmpty(state)
+    }
+
+    /**
+     * Reads the existing FocusTomato_backup.json directly from public storage
+     * (/storage/emulated/0/Documents/FocusTomato/FocusTomato_backup.json), with MediaStore fallback.
+     */
+    fun readExistingExternalBackup(): AppBackupState? {
+        // 1. Direct File read from /storage/emulated/0/Documents/FocusTomato/FocusTomato_backup.json
+        try {
+            val publicFile = getPublicBackupFile()
+            if (publicFile.exists() && publicFile.isFile && publicFile.canRead() && publicFile.length() > 0L) {
+                val raw = publicFile.readText(Charsets.UTF_8)
+                parseBackupJson(raw)?.let { return it }
+            }
+        } catch (_: Exception) {
+        }
+
+        // 2. MediaStore fallback (Android 10+ if MANAGE_EXTERNAL_STORAGE is not yet granted)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val resolver = context.contentResolver
+                val collectionUri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
+                val selectionArgs = arrayOf(MASTER_BACKUP_FILE_NAME)
+                resolver.query(
+                    collectionUri,
+                    arrayOf(
+                        MediaStore.MediaColumns._ID,
+                        MediaStore.MediaColumns.RELATIVE_PATH
+                    ),
+                    selection,
+                    selectionArgs,
+                    "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
+                )?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(0)
+                        val relPath = cursor.getString(1).orEmpty()
+                        if (relPath.isNotBlank() && !relPath.contains(BACKUP_FOLDER_NAME, ignoreCase = true)) {
+                            continue
+                        }
+                        val rowUri = ContentUris.withAppendedId(collectionUri, id)
+                        val raw = resolver.openInputStream(rowUri)?.use { input ->
+                            input.bufferedReader(Charsets.UTF_8).readText()
+                        }
+                        if (!raw.isNullOrBlank()) {
+                            parseBackupJson(raw)?.let { return it }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return null
+    }
+
+    /**
+     * Empty-State Guard & Fresh Install Auto-Restore check:
+     * If the current app state is completely empty and a non-empty FocusTomato_backup.json exists,
+     * pause auto-backup immediately and return prompt details so the user can Restore All or Start Fresh.
+     */
+    suspend fun checkFreshInstallExistingBackup(currentState: AppBackupState): PendingBackupRestorePrompt? =
+        withContext(Dispatchers.IO) {
+            backupMutex.withLock {
+                if (wasStartFreshChosen()) return@withLock null
+                if (!BackupSmartMerger.isAppStateEffectivelyEmpty(currentState)) return@withLock null
+
+                val externalBackup = readExistingExternalBackup() ?: return@withLock null
+                if (!BackupSmartMerger.isBackupStateNonEmpty(externalBackup)) return@withLock null
+
+                autoBackupPaused = true
+                val sessionsCount = maxOf(externalBackup.pomodoroSessions.size, externalBackup.focusRecords.size)
+                PendingBackupRestorePrompt(
+                    backupState = externalBackup,
+                    tasksCount = externalBackup.tasks.size,
+                    sessionsCount = sessionsCount,
+                    projectsCount = externalBackup.projects.size,
+                    filePath = "$BACKUP_DISPLAY_PATH/$MASTER_BACKUP_FILE_NAME"
+                )
+            }
+        }
+
     suspend fun loadState(): AppBackupState = withContext(Dispatchers.IO) {
         backupMutex.withLock {
             val fileState = readStateFromFile(stateFile)
             val prefsState = readStateFromPrefs()
             val legacyUserStates = loadAnyLegacyUserDirectoryStates()
 
+            val deletedIds = getLocalDeletedIds()
             var resolved = when {
-                fileState != null && prefsState != null -> mergeBackupStates(prefsState, fileState)
+                fileState != null && prefsState != null -> {
+                    BackupSmartMerger.smartMerge(
+                        live = fileState,
+                        existingDisk = prefsState,
+                        localDeletedIds = deletedIds
+                    )
+                }
                 fileState != null -> fileState
                 prefsState != null -> prefsState
                 else -> SeedData.createInitialState()
@@ -97,34 +271,54 @@ class FocusRepository(private val context: Context) {
 
             for (legacy in legacyUserStates) {
                 if (legacy.tasks.isNotEmpty() || legacy.focusRecords.isNotEmpty() || legacy.projects.isNotEmpty()) {
-                    resolved = mergeBackupStates(resolved, legacy)
+                    resolved = BackupSmartMerger.smartMerge(resolved, legacy, deletedIds)
                 }
             }
 
-            val normalized = normalizeLoadedState(resolved)
+            val isFreshEmpty = fileState == null && prefsState == null && legacyUserStates.isEmpty()
+            val normalized = normalizeLoadedState(resolved, reconcileWithLocalPrefs = !isFreshEmpty)
             latestKnownState = normalized
-            saveStateInternal(normalized, notifyAutoBackup = false)
+
+            // IMPORTANT: On startup loadState(), only update internal app storage if non-empty.
+            // NEVER overwrite external FocusTomato_backup.json on fresh startup!
+            if (!isFreshEmpty) {
+                saveLocalPrivateStateOnly(normalized)
+            }
             normalized
         }
     }
 
-    suspend fun saveState(state: AppBackupState): Result<Unit> = withContext(Dispatchers.IO) {
+    /**
+     * Saves live app state to local storage and performs Full-State Smart Merge with the existing
+     * FocusTomato_backup.json on the device before writing back. Returns the final merged AppBackupState
+     * so the live UI always reflects the complete combined data.
+     */
+    suspend fun saveState(
+        state: AppBackupState,
+        bypassExternalBackup: Boolean = false
+    ): Result<AppBackupState> = withContext(Dispatchers.IO) {
         backupMutex.withLock {
             return@withContext try {
-                val normalized = normalizeLoadedState(state)
-                latestKnownState = normalized
-                saveStateInternal(normalized, notifyAutoBackup = true)
-                Result.success(Unit)
+                val mergedAndSaved = saveStateInternal(
+                    state = state,
+                    notifyAutoBackup = !bypassExternalBackup,
+                    writeToExternalBackup = !bypassExternalBackup
+                )
+                Result.success(mergedAndSaved)
             } catch (e: Exception) {
                 Result.failure(e)
             }
         }
     }
 
-    private fun saveStateInternal(state: AppBackupState, notifyAutoBackup: Boolean = true) {
-        syncSettingsToExplicitPreferences(state.settings)
-        val enriched = enrichStateForFullExport(state)
+    private fun saveLocalPrivateStateOnly(state: AppBackupState): String {
+        val enriched = enrichStateForFullExport(state, reconcileWithLocalPrefs = false)
         val json = adapter.toJson(enriched)
+        writePrivateStateFiles(json)
+        return json
+    }
+
+    private fun writePrivateStateFiles(json: String) {
         try {
             stateFile.parentFile?.mkdirs()
             val tmpFile = File(stateFile.parentFile, "${stateFile.name}.tmp")
@@ -143,14 +337,86 @@ class FocusRepository(private val context: Context) {
             prefs.edit().putString(PREFS_STATE_KEY, json).commit()
         } catch (_: Exception) {
         }
-        performSilentAutoBackupInternal(json, enriched, notifyUser = notifyAutoBackup)
+    }
+
+    private fun saveStateInternal(
+        state: AppBackupState,
+        notifyAutoBackup: Boolean = true,
+        writeToExternalBackup: Boolean = true,
+        skipExternalSmartMerge: Boolean = false
+    ): AppBackupState {
+        val localDeletedIds = getLocalDeletedIds()
+        val normalizedLive = normalizeLoadedState(state, reconcileWithLocalPrefs = false)
+
+        // Check existing public backup file for Empty-State Guard & Full-State Smart Merge
+        val existingExternal = if (writeToExternalBackup) readExistingExternalBackup() else null
+        val externalIsNonEmpty = existingExternal != null && BackupSmartMerger.isBackupStateNonEmpty(existingExternal)
+        val liveIsEmpty = BackupSmartMerger.isAppStateEffectivelyEmpty(normalizedLive)
+
+        // Empty-State Guard: NEVER overwrite an existing non-empty backup with an empty app state
+        if (writeToExternalBackup && (autoBackupPaused || (liveIsEmpty && externalIsNonEmpty))) {
+            latestKnownState = normalizedLive
+            saveLocalPrivateStateOnly(normalizedLive)
+            return normalizedLive
+        }
+
+        // Full-State Smart Merge: union existing phone backup with live state before writing
+        val finalMerged = if (writeToExternalBackup && !skipExternalSmartMerge && externalIsNonEmpty && existingExternal != null) {
+            val merged = BackupSmartMerger.smartMerge(
+                live = normalizedLive,
+                existingDisk = existingExternal,
+                localDeletedIds = localDeletedIds
+            )
+            // Restore any newly inherited preferences/AI/blocker settings into local SharedPreferences
+            syncMergedSettingsToDevicePrefs(merged)
+            normalizeLoadedState(merged, reconcileWithLocalPrefs = false)
+        } else {
+            syncSettingsToExplicitPreferences(normalizedLive.settings)
+            normalizedLive
+        }
+
+        val enriched = enrichStateForFullExport(finalMerged, reconcileWithLocalPrefs = false)
+        val json = adapter.toJson(enriched)
+
+        latestKnownState = enriched
+        writePrivateStateFiles(json)
+
+        if (writeToExternalBackup) {
+            performSilentAutoBackupInternal(json, enriched, notifyUser = notifyAutoBackup)
+        }
+        return enriched
+    }
+
+    private fun syncMergedSettingsToDevicePrefs(merged: AppBackupState) {
+        if (merged.allPreferences.isNotEmpty()) {
+            restoreAllSharedPreferencesFromSnapshot(merged.allPreferences)
+        }
+        syncSettingsToExplicitPreferences(merged.settings)
+        try {
+            StrictAppBlockerManager.setStrictBlockerEnabled(context, merged.settings.strictBlockerEnabled)
+            StrictAppBlockerManager.setWhitelistedPackages(context, merged.settings.whitelistedPackages.toSet())
+        } catch (_: Exception) {
+        }
+        try {
+            if (merged.settings.geminiApiKey.isNotBlank()) {
+                TomatoAiService.saveApiKey(context, merged.settings.geminiApiKey)
+            }
+            if (merged.settings.geminiModelId.isNotBlank()) {
+                TomatoAiService.saveSelectedModel(
+                    context,
+                    TomatoGeminiModel.fromModelId(merged.settings.geminiModelId)
+                )
+            }
+        } catch (_: Exception) {
+        }
     }
 
     private fun performSilentAutoBackupInternal(
         json: String,
-        enriched: AppBackupState? = null,
+        enriched: AppBackupState,
         notifyUser: Boolean = true
     ) {
+        if (autoBackupPaused) return
         try {
             val now = System.currentTimeMillis()
             prefs.edit().putLong(PREFS_LAST_AUTO_BACKUP_TIME, now).commit()
@@ -167,12 +433,13 @@ class FocusRepository(private val context: Context) {
                     fileName = MASTER_BACKUP_FILE_NAME,
                     fileSizeBytes = bytesSize,
                     formattedFileSize = formatFileSize(bytesSize),
-                    projectsCount = enriched?.projects?.size ?: 0,
-                    tasksCount = enriched?.tasks?.size ?: 0,
-                    subtasksCount = enriched?.subtasks?.size ?: 0,
-                    pomodoroSessionsCount = enriched?.pomodoroSessions?.size ?: 0,
-                    totalPrefsCount = enriched?.allPreferences?.values?.sumOf { it.size } ?: 0,
-                    updatedTimestamp = formatBackupTimestamp(now, true)
+                    projectsCount = enriched.projects.size,
+                    tasksCount = enriched.tasks.size,
+                    subtasksCount = enriched.subtasks.size,
+                    pomodoroSessionsCount = enriched.pomodoroSessions.size,
+                    totalPrefsCount = enriched.allPreferences.values.sumOf { it.size },
+                    updatedTimestamp = formatBackupTimestamp(now, true),
+                    mergedState = enriched
                 )
                 FocusNotificationManager.showAutoBackupSuccessNotification(context, summary)
             }
@@ -182,7 +449,7 @@ class FocusRepository(private val context: Context) {
 
     private fun syncSettingsToExplicitPreferences(settings: AppSettings) {
         try {
-            prefs.edit()
+            val editor = prefs.edit()
                 .putInt("setting_pomodoro_minutes", settings.pomodoroMinutes)
                 .putInt("setting_short_break_minutes", settings.shortBreakMinutes)
                 .putInt("setting_long_break_minutes", settings.longBreakMinutes)
@@ -197,12 +464,22 @@ class FocusRepository(private val context: Context) {
                 .putBoolean("setting_locked_in_recents_confirmed", settings.lockedInRecentsConfirmed)
                 .putBoolean("setting_has_prompted_permissions_on_launch", settings.hasPromptedPermissionsOnLaunch)
                 .putBoolean("setting_dark_theme", settings.darkTheme)
+                .putString("setting_accent_color_hex", settings.accentColorHex)
                 .putString("setting_language", settings.language.name)
                 .putString("setting_white_noise", settings.whiteNoise.name)
                 .putFloat("setting_white_noise_volume", settings.whiteNoiseVolume)
                 .putBoolean("strict_blocker_enabled", settings.strictBlockerEnabled)
                 .putStringSet("strict_blocker_whitelisted_packages", settings.whitelistedPackages.toSet())
-                .commit()
+                .putStringSet("strict_blocker_blocked_packages", settings.blockedPackages.toSet())
+                .putLong("setting_updated_at", settings.settingsUpdatedAt)
+
+            if (settings.geminiModelId.isNotBlank()) {
+                editor.putString(TomatoAiService.PREF_GEMINI_MODEL, settings.geminiModelId)
+            }
+            if (settings.geminiApiKey.isNotBlank()) {
+                editor.putString(TomatoAiService.PREF_GEMINI_API_KEY, settings.geminiApiKey)
+            }
+            editor.commit()
         } catch (_: Exception) {
         }
     }
@@ -230,7 +507,7 @@ class FocusRepository(private val context: Context) {
                 val sp = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
                 val entries = mutableListOf<ExportedPrefEntry>()
                 for ((key, rawVal) in sp.all) {
-                    if (key == PREFS_STATE_KEY || rawVal == null) continue
+                    if (key in LOCAL_ONLY_PREF_KEYS || rawVal == null) continue
                     val entry = when (rawVal) {
                         is String -> ExportedPrefEntry(key = key, type = "STRING", stringValue = rawVal)
                         is Int -> ExportedPrefEntry(key = key, type = "INT", intValue = rawVal)
@@ -261,7 +538,7 @@ class FocusRepository(private val context: Context) {
                 val sp = context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
                 val editor = sp.edit()
                 for (entry in entries) {
-                    if (entry.key == PREFS_STATE_KEY) continue
+                    if (entry.key in LOCAL_ONLY_PREF_KEYS) continue
                     when (entry.type.uppercase(Locale.ENGLISH)) {
                         "STRING" -> entry.stringValue?.let { editor.putString(entry.key, it) }
                         "INT" -> entry.intValue?.let { editor.putInt(entry.key, it) }
@@ -283,7 +560,10 @@ class FocusRepository(private val context: Context) {
         }
     }
 
-    private fun normalizeLoadedState(loaded: AppBackupState): AppBackupState {
+    private fun normalizeLoadedState(
+        loaded: AppBackupState,
+        reconcileWithLocalPrefs: Boolean = false
+    ): AppBackupState {
         // Reconcile any top-level relational subtasks into their parent TaskItem.subtasks
         val topLevelSubtasksByTask = loaded.subtasks.groupBy { it.parentTaskId }
         val normalizedTasks = loaded.tasks.mapIndexed { taskIdx, task ->
@@ -300,7 +580,8 @@ class FocusRepository(private val context: Context) {
                     isDone = exp.isCompleted,
                     parentTaskId = task.id,
                     sortOrder = exp.sortOrder,
-                    createdAt = exp.createdAt
+                    createdAt = exp.createdAt,
+                    updatedAt = exp.updatedAt
                 )
             }
             val mergedSubs = (inlineSubs + topSubs)
@@ -321,7 +602,8 @@ class FocusRepository(private val context: Context) {
                     title = sub.title,
                     isCompleted = sub.isDone,
                     sortOrder = idx,
-                    createdAt = sub.createdAt
+                    createdAt = sub.createdAt,
+                    updatedAt = sub.updatedAt
                 )
             }
         }
@@ -355,13 +637,29 @@ class FocusRepository(private val context: Context) {
             )
         }
 
-        val spStrictEnabled = prefs.getBoolean("strict_blocker_enabled", loaded.settings.strictBlockerEnabled)
-        val spWhitelist = prefs.getStringSet("strict_blocker_whitelisted_packages", null)?.toList()
-        val mergedWhitelist = (loaded.settings.whitelistedPackages + spWhitelist.orEmpty()).distinct().sorted()
-        val reconciledSettings = loaded.settings.copy(
-            strictBlockerEnabled = loaded.settings.strictBlockerEnabled || spStrictEnabled,
-            whitelistedPackages = mergedWhitelist
-        )
+        val reconciledSettings = if (reconcileWithLocalPrefs) {
+            val spStrictEnabled = prefs.getBoolean("strict_blocker_enabled", loaded.settings.strictBlockerEnabled)
+            val spWhitelist = prefs.getStringSet("strict_blocker_whitelisted_packages", null)?.toList()
+            val spBlocked = prefs.getStringSet("strict_blocker_blocked_packages", null)?.toList()
+            val mergedWhitelist = (loaded.settings.whitelistedPackages + spWhitelist.orEmpty()).distinct().sorted()
+            val mergedBlocked = (loaded.settings.blockedPackages + spBlocked.orEmpty()).distinct().sorted()
+            val spApiKey = prefs.getString(TomatoAiService.PREF_GEMINI_API_KEY, null)?.trim().orEmpty()
+            val spModel = prefs.getString(TomatoAiService.PREF_GEMINI_MODEL, null)?.trim().orEmpty()
+            loaded.settings.copy(
+                strictBlockerEnabled = loaded.settings.strictBlockerEnabled || spStrictEnabled,
+                whitelistedPackages = mergedWhitelist,
+                blockedPackages = mergedBlocked,
+                geminiApiKey = loaded.settings.geminiApiKey.ifBlank { spApiKey },
+                geminiModelId = loaded.settings.geminiModelId.ifBlank {
+                    spModel.ifBlank { TomatoGeminiModel.FLASH_2_5.modelId }
+                }
+            )
+        } else {
+            loaded.settings.copy(
+                whitelistedPackages = loaded.settings.whitelistedPackages.distinct().sorted(),
+                blockedPackages = loaded.settings.blockedPackages.distinct().sorted()
+            )
+        }
 
         val normalizedFolders = loaded.folders.mapIndexed { idx, folder ->
             folder.copy(sortOrder = if (folder.sortOrder != 0) folder.sortOrder else idx)
@@ -383,8 +681,14 @@ class FocusRepository(private val context: Context) {
             dailyMinutesByDateKey = dailyMap
         )
 
+        val (computedCurrentStreak, computedBestStreak) = BackupSmartMerger.computeDailyStreaks(combinedSessions)
+        val normalizedForest = loaded.forestState.copy(
+            currentDailyStreak = maxOf(computedCurrentStreak, loaded.forestState.currentDailyStreak),
+            bestDailyStreak = maxOf(computedBestStreak, loaded.forestState.bestDailyStreak, computedCurrentStreak)
+        )
+
         return loaded.copy(
-            backupVersion = 3,
+            backupVersion = 4,
             tasks = normalizedTasks,
             subtasks = allSubtaskExports,
             projects = normalizedProjects,
@@ -392,50 +696,90 @@ class FocusRepository(private val context: Context) {
             focusRecords = combinedSessions,
             pomodoroSessions = combinedSessions,
             focusStats = stats,
-            settings = reconciledSettings
+            settings = reconciledSettings,
+            forestState = normalizedForest
         )
     }
 
-    fun enrichStateForFullExport(state: AppBackupState): AppBackupState {
-        // Reconcile passed-in state with any state in memory/disk so zero user items are ever dropped
-        var reconciled = state
-        latestKnownState?.let { known ->
-            if (known.tasks.size > reconciled.tasks.size ||
-                known.projects.size > reconciled.projects.size ||
-                known.focusRecords.size > reconciled.focusRecords.size
-            ) {
-                reconciled = mergeBackupStates(known, reconciled).copy(
-                    settings = state.settings,
-                    persistedTimer = state.persistedTimer ?: known.persistedTimer
-                )
+    fun enrichStateForFullExport(
+        state: AppBackupState,
+        reconcileWithLocalPrefs: Boolean = true
+    ): AppBackupState {
+        val spApiKey = prefs.getString(TomatoAiService.PREF_GEMINI_API_KEY, null)?.trim().orEmpty()
+        val spModel = prefs.getString(TomatoAiService.PREF_GEMINI_MODEL, null)?.trim().orEmpty()
+        val hydratedSettings = state.settings.copy(
+            geminiApiKey = state.settings.geminiApiKey.ifBlank { spApiKey },
+            geminiModelId = state.settings.geminiModelId.ifBlank {
+                spModel.ifBlank { TomatoGeminiModel.FLASH_2_5.modelId }
             }
-        }
-        syncSettingsToExplicitPreferences(reconciled.settings)
-        val normalized = normalizeLoadedState(reconciled)
+        )
+        val normalized = normalizeLoadedState(
+            state.copy(settings = hydratedSettings),
+            reconcileWithLocalPrefs = reconcileWithLocalPrefs
+        )
+        syncSettingsToExplicitPreferences(normalized.settings)
         val allPrefs = collectAllSharedPreferencesSnapshot()
         return normalized.copy(
-            backupVersion = 3,
+            backupVersion = 4,
             exportedAt = System.currentTimeMillis(),
             allPreferences = allPrefs
         )
     }
 
+    /**
+     * Manual backup export:
+     * Enforces Empty-State Guard and Full-State Smart Merge (reads existing FocusTomato_backup.json first,
+     * unions with current live state respecting local deletedIds, writes merged result in-place,
+     * updates private state, and returns mergedState inside ManualBackupExportSummary).
+     */
     suspend fun exportManualBackupWithSummary(
         state: AppBackupState,
         nowMillis: Long = System.currentTimeMillis()
     ): Result<ManualBackupExportSummary> = withContext(Dispatchers.IO) {
         backupMutex.withLock {
             return@withContext try {
+                val localDeletedIds = getLocalDeletedIds()
+                val normalizedLive = normalizeLoadedState(state, reconcileWithLocalPrefs = false)
+                val existingExternal = readExistingExternalBackup()
+                val externalIsNonEmpty = existingExternal != null &&
+                    BackupSmartMerger.isBackupStateNonEmpty(existingExternal)
+                val liveIsEmpty = BackupSmartMerger.isAppStateEffectivelyEmpty(normalizedLive)
+
+                if (liveIsEmpty && externalIsNonEmpty) {
+                    return@withContext Result.failure(
+                        IllegalStateException(
+                            "Existing non-empty backup detected on device. Restore it before exporting an empty state."
+                        )
+                    )
+                }
+
+                val mergedBase = if (externalIsNonEmpty && existingExternal != null) {
+                    val merged = BackupSmartMerger.smartMerge(
+                        live = normalizedLive,
+                        existingDisk = existingExternal,
+                        localDeletedIds = localDeletedIds
+                    )
+                    syncMergedSettingsToDevicePrefs(merged)
+                    merged
+                } else {
+                    normalizedLive
+                }
+
                 val fileName = MASTER_BACKUP_FILE_NAME
-                val enriched = enrichStateForFullExport(state).copy(exportedAt = nowMillis)
+                val enriched = enrichStateForFullExport(mergedBase, reconcileWithLocalPrefs = false)
+                    .copy(exportedAt = nowMillis)
                 val json = adapter.toJson(enriched)
                 val bytes = json.toByteArray(Charsets.UTF_8)
+
                 writeJsonToDocumentsFolder(
                     fileName = fileName,
                     json = json,
                     overwriteExisting = true
                 )
                 removeLegacyAutoBackupFileIfPresent()
+
+                latestKnownState = enriched
+                writePrivateStateFiles(json)
                 prefs.edit().putLong(PREFS_LAST_AUTO_BACKUP_TIME, nowMillis).commit()
 
                 val totalPrefsCount = enriched.allPreferences.values.sumOf { it.size }
@@ -448,7 +792,8 @@ class FocusRepository(private val context: Context) {
                     subtasksCount = enriched.subtasks.size,
                     pomodoroSessionsCount = enriched.pomodoroSessions.size,
                     totalPrefsCount = totalPrefsCount,
-                    updatedTimestamp = formatBackupTimestamp(nowMillis, true)
+                    updatedTimestamp = formatBackupTimestamp(nowMillis, true),
+                    mergedState = enriched
                 )
                 Result.success(summary)
             } catch (e: Exception) {
@@ -470,18 +815,42 @@ class FocusRepository(private val context: Context) {
         mode: BackupImportMode
     ): AppBackupState = withContext(Dispatchers.IO) {
         backupMutex.withLock {
-            val normalizedImported = normalizeLoadedState(imported)
+            autoBackupPaused = false
+            markStartFreshChosen(false)
+
+            val normalizedImported = normalizeLoadedState(imported, reconcileWithLocalPrefs = false)
+            if (mode == BackupImportMode.REPLACE) {
+                clearLocalDeletedIds()
+            } else {
+                val restoredIds = buildList {
+                    addAll(normalizedImported.tasks.map { it.id })
+                    addAll(normalizedImported.tasks.flatMap { t -> t.subtasks.map { it.id } })
+                    addAll(normalizedImported.projects.map { it.id })
+                    addAll(normalizedImported.folders.map { it.id })
+                    addAll(normalizedImported.tags.map { it.id })
+                    addAll(normalizedImported.focusRecords.map { it.id })
+                    addAll(normalizedImported.forestState.plantedHistory.map { it.id })
+                }
+                removeDeletedIds(restoredIds)
+            }
+
             val targetState = when (mode) {
-                BackupImportMode.MERGE -> mergeBackupStates(current, normalizedImported)
+                BackupImportMode.MERGE -> BackupSmartMerger.smartMerge(
+                    live = normalizeLoadedState(current, reconcileWithLocalPrefs = false),
+                    existingDisk = normalizedImported,
+                    localDeletedIds = getLocalDeletedIds()
+                )
                 BackupImportMode.REPLACE -> normalizedImported
             }
-            if (normalizedImported.allPreferences.isNotEmpty()) {
-                restoreAllSharedPreferencesFromSnapshot(normalizedImported.allPreferences)
-            }
-            val finalState = normalizeLoadedState(targetState)
+            syncMergedSettingsToDevicePrefs(targetState)
+            val finalState = normalizeLoadedState(targetState, reconcileWithLocalPrefs = false)
             latestKnownState = finalState
-            saveStateInternal(finalState)
-            finalState
+            saveStateInternal(
+                state = finalState,
+                notifyAutoBackup = false,
+                writeToExternalBackup = true,
+                skipExternalSmartMerge = (mode == BackupImportMode.REPLACE)
+            )
         }
     }
 
@@ -496,22 +865,30 @@ class FocusRepository(private val context: Context) {
             throw IOException("Backup JSON payload is empty")
         }
 
-        val resolver = context.contentResolver
-        val relativePath = "${Environment.DIRECTORY_DOCUMENTS}/$BACKUP_FOLDER_NAME/"
-
-        // 1. Clean up any numbered duplicate files like "focus_zohayr_backup (1).json" on filesystem
+        // 1. Clean up any numbered duplicate files like "FocusTomato_backup (1).json" on filesystem
         cleanupFilesystemDuplicateBackupFiles(fileName)
 
+        // 2. Direct persistent public path write FIRST:
+        //    /storage/emulated/0/Documents/FocusTomato/FocusTomato_backup.json
+        //    Works directly with All Files Access (MANAGE_EXTERNAL_STORAGE) on Android 11+,
+        //    legacy storage on Android <= 10, and Robolectric tests — guarantees zero "(1)" duplicates!
+        val directWrittenFile = tryWriteDirectlyToPublicFolder(fileName, bytes)
+        if (directWrittenFile != null) {
+            return Uri.fromFile(directWrittenFile)
+        }
+
+        // 3. Fallback to MediaStore on Android 10+ ONLY if MANAGE_EXTERNAL_STORAGE has not yet been granted
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = context.contentResolver
+            val relativePath = "${Environment.DIRECTORY_DOCUMENTS}/$BACKUP_FOLDER_NAME/"
             val collectionUri = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
 
             if (overwriteExisting) {
                 var targetExistingUri: Uri? = null
 
-                // Check all MediaStore entries matching focus_zohayr_backup* inside Documents/Focus_Zohayr/
                 try {
                     val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ? OR ${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
-                    val selectionArgs = arrayOf("focus_zohayr_backup%", LEGACY_AUTO_BACKUP_FILE_NAME)
+                    val selectionArgs = arrayOf("FocusTomato_backup%", LEGACY_AUTO_BACKUP_FILE_NAME)
                     resolver.query(
                         collectionUri,
                         arrayOf(
@@ -536,14 +913,12 @@ class FocusRepository(private val context: Context) {
                                 if (targetExistingUri == null) {
                                     targetExistingUri = rowUri
                                 } else {
-                                    // Extra duplicate row with the exact same name -> delete
                                     try {
                                         resolver.delete(rowUri, null, null)
                                     } catch (_: Exception) {
                                     }
                                 }
                             } else {
-                                // Numbered duplicate like "focus_zohayr_backup (1).json" -> delete
                                 try {
                                     resolver.delete(rowUri, null, null)
                                 } catch (_: Exception) {
@@ -554,7 +929,6 @@ class FocusRepository(private val context: Context) {
                 } catch (_: Exception) {
                 }
 
-                // Fallback to persisted URI if query didn't return it directly
                 if (targetExistingUri == null) {
                     val savedUriStr = prefs.getString(PREFS_MASTER_BACKUP_URI, null)
                     if (!savedUriStr.isNullOrBlank()) {
@@ -585,7 +959,6 @@ class FocusRepository(private val context: Context) {
                     }
                 }
 
-                // If an existing MediaStore entry for focus_zohayr_backup.json exists, overwrite it in-place ("wt")
                 if (targetExistingUri != null) {
                     val wroteInPlace = try {
                         (resolver.openOutputStream(targetExistingUri!!, "wt")
@@ -608,39 +981,8 @@ class FocusRepository(private val context: Context) {
                         }
                     }
                 }
-
-                // If the file already exists on disk in Documents/Focus_Zohayr/focus_zohayr_backup.json
-                // (e.g., from a previous install or direct File write), overwrite it directly in-place
-                // so MediaStore.insert() never sees a pre-existing file and never appends " (1)".
-                try {
-                    val publicDocs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-                    if (publicDocs != null) {
-                        val existingDiskFile = File(File(publicDocs, BACKUP_FOLDER_NAME), fileName)
-                        if (existingDiskFile.exists()) {
-                            val overwroteDiskFile = try {
-                                java.io.FileOutputStream(existingDiskFile, false).use { out ->
-                                    out.write(bytes)
-                                    out.flush()
-                                    true
-                                }
-                            } catch (_: Exception) {
-                                false
-                            }
-                            if (overwroteDiskFile) {
-                                return Uri.fromFile(existingDiskFile)
-                            } else {
-                                try {
-                                    existingDiskFile.delete()
-                                } catch (_: Exception) {
-                                }
-                            }
-                        }
-                    }
-                } catch (_: Exception) {
-                }
             }
 
-            // Insert a single clean MediaStore entry (without IS_PENDING so MediaProvider never renames on un-pend)
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                 put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
@@ -678,26 +1020,50 @@ class FocusRepository(private val context: Context) {
             }
         }
 
-        // Direct Documents/Focus_Zohayr fallback (API < 29 or local JVM test environment)
+        // 4. Final fallback to app-private Documents mirror if external storage is inaccessible
         val fallbackFile = writeMirrorDocumentsFileOrThrow(fileName, bytes)
         return Uri.fromFile(fallbackFile)
     }
 
+    private fun tryWriteDirectlyToPublicFolder(fileName: String, bytes: ByteArray): File? {
+        // On Android 11+, attempt direct public File write when MANAGE_EXTERNAL_STORAGE is granted
+        // or when the directory is writable (e.g. Robolectric JVM tests)
+        return try {
+            val targetDir = getPublicBackupDirectory()
+            if (!targetDir.exists()) {
+                targetDir.mkdirs()
+            }
+            if (!targetDir.exists() || !targetDir.isDirectory) return null
+
+            val targetFile = File(targetDir, fileName)
+            FileOutputStream(targetFile, false).use { out ->
+                out.write(bytes)
+                out.flush()
+            }
+            if (targetFile.exists() && targetFile.length() == bytes.size.toLong()) {
+                targetFile
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun cleanupFilesystemDuplicateBackupFiles(canonicalFileName: String) {
         try {
-            val publicDocs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-            if (publicDocs != null) {
-                val dir = File(publicDocs, BACKUP_FOLDER_NAME)
-                if (dir.exists() && dir.isDirectory) {
-                    dir.listFiles()?.forEach { file ->
-                        if (file.isFile &&
-                            file.name != canonicalFileName &&
-                            (file.name.startsWith("focus_zohayr_backup") || file.name == LEGACY_AUTO_BACKUP_FILE_NAME)
-                        ) {
-                            try {
-                                file.delete()
-                            } catch (_: Exception) {
-                            }
+            val dir = getPublicBackupDirectory()
+            if (dir.exists() && dir.isDirectory) {
+                dir.listFiles()?.forEach { file ->
+                    if (file.isFile &&
+                        file.name != canonicalFileName &&
+                        (file.name.startsWith("FocusTomato_backup") ||
+                            file.name.startsWith("focus_zohayr_backup") ||
+                            file.name == LEGACY_AUTO_BACKUP_FILE_NAME)
+                    ) {
+                        try {
+                            file.delete()
+                        } catch (_: Exception) {
                         }
                     }
                 }
@@ -708,45 +1074,14 @@ class FocusRepository(private val context: Context) {
 
     @Throws(IOException::class)
     private fun writeMirrorDocumentsFileOrThrow(fileName: String, bytes: ByteArray): File {
-        val publicDocs = try {
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-        } catch (_: Exception) {
-            null
+        val internalFallbackDir = File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
+        internalFallbackDir.mkdirs()
+        val internalFile = File(internalFallbackDir, fileName)
+        FileOutputStream(internalFile, false).use { out ->
+            out.write(bytes)
+            out.flush()
         }
-        val targetDir = if (publicDocs != null) {
-            File(publicDocs, BACKUP_FOLDER_NAME)
-        } else {
-            File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
-        }
-
-        if (!targetDir.exists() && !targetDir.mkdirs()) {
-            val internalFallbackDir = File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
-            internalFallbackDir.mkdirs()
-            val internalFile = File(internalFallbackDir, fileName)
-            java.io.FileOutputStream(internalFile, false).use { out ->
-                out.write(bytes)
-                out.flush()
-            }
-            return internalFile
-        }
-
-        return try {
-            val outFile = File(targetDir, fileName)
-            java.io.FileOutputStream(outFile, false).use { out ->
-                out.write(bytes)
-                out.flush()
-            }
-            outFile
-        } catch (_: Exception) {
-            val internalFallbackDir = File(File(context.filesDir, "Documents"), BACKUP_FOLDER_NAME)
-            internalFallbackDir.mkdirs()
-            val internalFile = File(internalFallbackDir, fileName)
-            java.io.FileOutputStream(internalFile, false).use { out ->
-                out.write(bytes)
-                out.flush()
-            }
-            internalFile
-        }
+        return internalFile
     }
 
     private fun removeLegacyAutoBackupFileIfPresent() {
@@ -789,7 +1124,9 @@ class FocusRepository(private val context: Context) {
     private fun readStateFromFile(file: File): AppBackupState? {
         return try {
             if (file.exists()) {
-                adapter.fromJson(file.readText(Charsets.UTF_8))?.let { normalizeLoadedState(it) }
+                adapter.fromJson(file.readText(Charsets.UTF_8))?.let {
+                    normalizeLoadedState(it, reconcileWithLocalPrefs = false)
+                }
             } else null
         } catch (_: Exception) {
             null
@@ -799,7 +1136,9 @@ class FocusRepository(private val context: Context) {
     private fun readStateFromPrefs(): AppBackupState? {
         return try {
             val raw = prefs.getString(PREFS_STATE_KEY, null) ?: return null
-            adapter.fromJson(raw)?.let { normalizeLoadedState(it) }
+            adapter.fromJson(raw)?.let {
+                normalizeLoadedState(it, reconcileWithLocalPrefs = false)
+            }
         } catch (_: Exception) {
             null
         }
@@ -821,52 +1160,19 @@ class FocusRepository(private val context: Context) {
         }
     }
 
-    fun mergeBackupStates(current: AppBackupState, imported: AppBackupState): AppBackupState {
-        val normCurrent = normalizeLoadedState(current)
-        val normImported = normalizeLoadedState(imported)
-
-        val mergedTasks = (normImported.tasks + normCurrent.tasks)
-            .groupBy { it.id }
-            .map { (_, duplicates) ->
-                val primary = duplicates.maxByOrNull { it.updatedAtEpochMillis } ?: duplicates.first()
-                val allSubs = duplicates.flatMap { it.subtasks }.distinctBy { it.id }
-                primary.copy(subtasks = allSubs)
-            }
-
-        val mergedProjects = (normCurrent.projects + normImported.projects)
-            .distinctBy { it.id }
-        val mergedFolders = (normCurrent.folders + normImported.folders)
-            .distinctBy { it.id }
-        val mergedTags = (normCurrent.tags + normImported.tags)
-            .distinctBy { it.id }
-        val mergedRecords = (normCurrent.focusRecords + normImported.focusRecords + normImported.pomodoroSessions)
-            .distinctBy { it.id }
-            .sortedByDescending { it.startedAtEpochMillis }
-
-        val mergedPlantedHistory = (normCurrent.forestState.plantedHistory + normImported.forestState.plantedHistory)
-            .distinctBy { it.id }
-            .sortedByDescending { it.plantedAtEpochMillis }
-        val mergedUnlockedSpecies = (normCurrent.forestState.unlockedSpecies + normImported.forestState.unlockedSpecies)
-            .distinct()
-        val mergedSunlight = maxOf(normCurrent.forestState.sunlightPoints, normImported.forestState.sunlightPoints)
-
-        return normalizeLoadedState(
-            normCurrent.copy(
-                tasks = mergedTasks,
-                projects = mergedProjects,
-                folders = mergedFolders,
-                tags = mergedTags,
-                focusRecords = mergedRecords,
-                pomodoroSessions = mergedRecords,
-                settings = normImported.settings,
-                allPreferences = if (normImported.allPreferences.isNotEmpty()) normImported.allPreferences else normCurrent.allPreferences,
-                forestState = normCurrent.forestState.copy(
-                    sunlightPoints = mergedSunlight,
-                    unlockedSpecies = mergedUnlockedSpecies,
-                    plantedHistory = mergedPlantedHistory
-                )
-            )
+    fun mergeBackupStates(
+        current: AppBackupState,
+        imported: AppBackupState,
+        localDeletedIds: Set<String> = getLocalDeletedIds()
+    ): AppBackupState {
+        val normCurrent = normalizeLoadedState(current, reconcileWithLocalPrefs = false)
+        val normImported = normalizeLoadedState(imported, reconcileWithLocalPrefs = false)
+        val merged = BackupSmartMerger.smartMerge(
+            live = normCurrent,
+            existingDisk = normImported,
+            localDeletedIds = localDeletedIds
         )
+        return normalizeLoadedState(merged, reconcileWithLocalPrefs = false)
     }
 
     fun exportJson(state: AppBackupState): String {
@@ -893,7 +1199,10 @@ class FocusRepository(private val context: Context) {
             if (!hasValidStructure) return null
             adapter.fromJson(trimmed)?.let { parsed ->
                 val hydratedSettings = applyExportedPreferencesToSettings(parsed.settings, parsed.allPreferences)
-                normalizeLoadedState(parsed.copy(settings = hydratedSettings))
+                normalizeLoadedState(
+                    parsed.copy(settings = hydratedSettings),
+                    reconcileWithLocalPrefs = false
+                )
             }
         } catch (_: Exception) {
             null
@@ -921,6 +1230,7 @@ class FocusRepository(private val context: Context) {
             lockedInRecentsConfirmed = entries["setting_locked_in_recents_confirmed"]?.booleanValue ?: base.lockedInRecentsConfirmed,
             hasPromptedPermissionsOnLaunch = entries["setting_has_prompted_permissions_on_launch"]?.booleanValue ?: base.hasPromptedPermissionsOnLaunch,
             darkTheme = entries["setting_dark_theme"]?.booleanValue ?: base.darkTheme,
+            accentColorHex = entries["setting_accent_color_hex"]?.stringValue ?: base.accentColorHex,
             language = entries["setting_language"]?.stringValue?.let {
                 runCatching { AppLanguage.valueOf(it) }.getOrNull()
             } ?: base.language,
@@ -929,7 +1239,20 @@ class FocusRepository(private val context: Context) {
             } ?: base.whiteNoise,
             whiteNoiseVolume = entries["setting_white_noise_volume"]?.floatValue ?: base.whiteNoiseVolume,
             strictBlockerEnabled = entries["strict_blocker_enabled"]?.booleanValue ?: base.strictBlockerEnabled,
-            whitelistedPackages = entries["strict_blocker_whitelisted_packages"]?.stringSetValue ?: base.whitelistedPackages
+            whitelistedPackages = entries["strict_blocker_whitelisted_packages"]?.stringSetValue ?: base.whitelistedPackages,
+            blockedPackages = entries["strict_blocker_blocked_packages"]?.stringSetValue ?: base.blockedPackages,
+            geminiModelId = base.geminiModelId.ifBlank {
+                entries[TomatoAiService.PREF_GEMINI_MODEL]?.stringValue ?: TomatoGeminiModel.FLASH_2_5.modelId
+            },
+            geminiApiKey = base.geminiApiKey.ifBlank {
+                entries[TomatoAiService.PREF_GEMINI_API_KEY]?.stringValue.orEmpty()
+            },
+            settingsUpdatedAt = maxOf(
+                base.settingsUpdatedAt,
+                entries["setting_updated_at"]?.longValue ?: 0L
+            )
         )
     }
+
+    fun hasAllFilesAccess(): Boolean = SystemPermissionsHelper.isAllFilesAccessGranted(context)
 }

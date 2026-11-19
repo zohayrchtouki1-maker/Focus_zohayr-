@@ -34,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -47,10 +48,13 @@ import com.example.i18n.AppStrings
 import com.example.model.AppLanguage
 import com.example.model.TaskPriority
 import com.example.notifications.FocusNotificationManager
+import com.example.notifications.SystemPermissionsHelper
+import com.example.ui.components.AllFilesAccessPermissionDialog
 import com.example.ui.components.BackgroundTimerPermissionsDialog
 import com.example.ui.components.CalendarDialog
 import com.example.ui.components.FloatingMiniTimerBar
 import com.example.ui.components.ForestDialog
+import com.example.ui.components.FreshInstallAutoRestoreDialog
 import com.example.ui.components.FullScreenTimerOverlay
 import com.example.ui.components.MainTaskWorkspace
 import com.example.ui.components.ReportsDialog
@@ -139,10 +143,17 @@ fun FocusTodoAppRoot(
         }
     }
 
+    val context = LocalContext.current
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ ->
         viewModel.refreshSystemPermissions()
+    }
+
+    val legacyStoragePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        viewModel.onAppResumed()
     }
 
     LaunchedEffect(uiState.permissionRequestTrigger) {
@@ -510,6 +521,34 @@ fun FocusTodoAppRoot(
                         onSendMessage = { viewModel.sendTomatoAiMessage(it) },
                         onClearChat = { viewModel.clearTomatoAiChat() },
                         onDismiss = { viewModel.setShowTomatoAi(false) }
+                    )
+                }
+
+                // Fresh Install Existing Backup Auto-Restore Prompt
+                val pendingRestore = uiState.pendingAutoRestorePrompt
+                if (pendingRestore != null) {
+                    FreshInstallAutoRestoreDialog(
+                        prompt = pendingRestore,
+                        isArabic = isArabic,
+                        onRestoreAll = { viewModel.confirmRestoreFoundBackup() },
+                        onStartFresh = { viewModel.dismissFoundBackupAndStartFresh() }
+                    )
+                } else if (uiState.showAllFilesAccessPrompt && !uiState.systemPermissions.allFilesAccessGranted) {
+                    AllFilesAccessPermissionDialog(
+                        isArabic = isArabic,
+                        onGrantAccess = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                SystemPermissionsHelper.openAllFilesAccessSettings(context)
+                            } else {
+                                legacyStoragePermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.READ_EXTERNAL_STORAGE,
+                                        Manifest.permission.WRITE_EXTERNAL_STORAGE
+                                    )
+                                )
+                            }
+                        },
+                        onDismiss = { viewModel.dismissAllFilesAccessPrompt() }
                     )
                 }
             }

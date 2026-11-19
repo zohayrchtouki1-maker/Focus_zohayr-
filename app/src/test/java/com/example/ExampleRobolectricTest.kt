@@ -159,11 +159,13 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `local backup generates focus_zohayr_backup filename and supports exhaustive v3 export and restore`() {
+    fun `local backup generates FocusTomato_backup filename and supports exhaustive v4 export and restore`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        FocusRepository.resetStaticCacheForTests()
         val repo = FocusRepository(context)
-        assertEquals("focus_zohayr_backup.json", FocusRepository.MASTER_BACKUP_FILE_NAME)
-        assertEquals("focus_zohayr_backup.json", FocusRepository.AUTO_BACKUP_FILE_NAME)
+        assertEquals("FocusTomato", FocusRepository.BACKUP_FOLDER_NAME)
+        assertEquals("FocusTomato_backup.json", FocusRepository.MASTER_BACKUP_FILE_NAME)
+        assertEquals("FocusTomato_backup.json", FocusRepository.AUTO_BACKUP_FILE_NAME)
 
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         org.robolectric.Shadows.shadowOf(context as android.app.Application)
@@ -226,10 +228,10 @@ class ExampleRobolectricTest {
             val publicDocs = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS)
             val backupDir = java.io.File(publicDocs, FocusRepository.BACKUP_FOLDER_NAME)
             backupDir.mkdirs()
-            val masterFile = java.io.File(backupDir, "focus_zohayr_backup.json")
+            val masterFile = java.io.File(backupDir, "FocusTomato_backup.json")
             masterFile.writeText("{\"old\":true}")
-            java.io.File(backupDir, "focus_zohayr_backup (1).json").writeText("{}")
-            java.io.File(backupDir, "focus_zohayr_backup (2).json").writeText("{}")
+            java.io.File(backupDir, "FocusTomato_backup (1).json").writeText("{}")
+            java.io.File(backupDir, "FocusTomato_backup (2).json").writeText("{}")
 
             val saveRes = repo.saveState(currentState)
             assertTrue(saveRes.isSuccess)
@@ -238,7 +240,7 @@ class ExampleRobolectricTest {
             assertTrue(secondSaveRes.isSuccess)
 
             val filesInBackupDir = backupDir.listFiles()?.map { it.name }.orEmpty()
-            assertEquals(listOf("focus_zohayr_backup.json"), filesInBackupDir)
+            assertEquals(listOf("FocusTomato_backup.json"), filesInBackupDir)
             assertTrue(masterFile.readText().contains("existing_task_1"))
 
             assertTrue(repo.getLastAutoBackupTimeMillis() > 0L)
@@ -265,7 +267,7 @@ class ExampleRobolectricTest {
             val summaryRes = repo.exportManualBackupWithSummary(loadedState)
             assertTrue(summaryRes.isSuccess)
             val summary = summaryRes.getOrNull()!!
-            assertEquals("focus_zohayr_backup.json", summary.fileName)
+            assertEquals("FocusTomato_backup.json", summary.fileName)
             assertEquals(5, summary.projectsCount)
             assertEquals(1, summary.tasksCount)
             assertEquals(2, summary.subtasksCount)
@@ -275,14 +277,14 @@ class ExampleRobolectricTest {
             assertTrue(summary.updatedTimestamp.isNotBlank())
 
             val exportedJson = repo.exportJson(loadedState)
-            assertTrue(exportedJson.contains("\"backupVersion\": 3"))
+            assertTrue(exportedJson.contains("\"backupVersion\": 4"))
             assertTrue(exportedJson.contains("\"subtasks\""))
             assertTrue(exportedJson.contains("\"pomodoroSessions\""))
             assertTrue(exportedJson.contains("\"allPreferences\""))
 
             val parsedFromExport = repo.parseBackupJson(exportedJson)
             assertNotNull(parsedFromExport)
-            assertEquals(3, parsedFromExport!!.backupVersion)
+            assertEquals(4, parsedFromExport!!.backupVersion)
             assertEquals(5, parsedFromExport.projects.size)
             assertEquals(2, parsedFromExport.subtasks.size)
             assertEquals(1, parsedFromExport.pomodoroSessions.size)
@@ -316,11 +318,284 @@ class ExampleRobolectricTest {
             // Test Shareable file creation
             val shareFile = repo.createShareableBackupFile(merged)
             assertTrue(shareFile.exists())
-            assertEquals("focus_zohayr_backup.json", shareFile.name)
+            assertEquals("FocusTomato_backup.json", shareFile.name)
 
             // Test JSON validation rejects invalid payload
             val invalidParsed = repo.parseBackupJson("{\"invalid_key\": 123}")
             assertEquals(null, invalidParsed)
+        }
+    }
+
+    @Test
+    fun `empty state guard never overwrites existing FocusTomato backup and prompts auto-restore on fresh install`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        FocusRepository.resetStaticCacheForTests()
+        val repo = FocusRepository(context)
+
+        kotlinx.coroutines.runBlocking {
+            val today = DateUtils.todayEpochDay()
+            val existingBackup = SeedData.createInitialState().copy(
+                tasks = listOf(
+                    TaskItem(id = "old_t1", title = "Old Backup Task 1", dueDateEpochDay = today),
+                    TaskItem(id = "old_t2", title = "Old Backup Task 2", dueDateEpochDay = today)
+                ),
+                focusRecords = listOf(
+                    com.example.model.FocusRecord(
+                        id = "old_s1",
+                        taskId = "old_t1",
+                        taskTitle = "Old Backup Task 1",
+                        startedAtEpochMillis = DateUtils.millisFromEpochDay(today, 9, 0),
+                        durationMinutes = 30
+                    )
+                ),
+                settings = com.example.model.AppSettings(
+                    pomodoroMinutes = 45,
+                    accentColorHex = "#34A853",
+                    whitelistedPackages = listOf("com.whatsapp"),
+                    settingsUpdatedAt = 5_000L
+                )
+            )
+
+            // Seed pre-existing backup on public storage (/Documents/FocusTomato/FocusTomato_backup.json)
+            val publicFile = repo.getPublicBackupFile()
+            publicFile.parentFile?.mkdirs()
+            publicFile.writeText(repo.exportJson(existingBackup), Charsets.UTF_8)
+
+            // Simulate fresh install (clear private app storage & prefs)
+            java.io.File(context.filesDir, "focus_todo_state.json").delete()
+            context.getSharedPreferences(FocusRepository.PREFS_NAME, Context.MODE_PRIVATE).edit().clear().commit()
+            FocusRepository.resetStaticCacheForTests()
+
+            val freshLoaded = repo.loadState()
+            assertTrue(repo.isAppStateEffectivelyEmpty(freshLoaded))
+
+            // 1. Existing backup file MUST still have all old tasks & sessions (never overwritten!)
+            val stillOnDisk = repo.readExistingExternalBackup()
+            assertNotNull(stillOnDisk)
+            assertEquals(2, stillOnDisk!!.tasks.size)
+            assertEquals(1, stillOnDisk.focusRecords.size)
+
+            // 2. Fresh-install check pauses auto-backup and returns prompt with exact counts
+            val prompt = repo.checkFreshInstallExistingBackup(freshLoaded)
+            assertNotNull(prompt)
+            assertEquals(2, prompt!!.tasksCount)
+            assertEquals(1, prompt.sessionsCount)
+            assertTrue(repo.isAutoBackupPaused())
+
+            // 3. Attempting saveState with empty state while paused MUST NOT overwrite existing backup
+            repo.saveState(freshLoaded)
+            val afterAttemptedEmptySave = repo.readExistingExternalBackup()
+            assertNotNull(afterAttemptedEmptySave)
+            assertEquals(2, afterAttemptedEmptySave!!.tasks.size)
+
+            // 4. Confirming Restore All restores everything & unpauses auto-backup
+            val restored = repo.restoreFullStateAtomically(
+                current = freshLoaded,
+                imported = prompt.backupState,
+                mode = com.example.data.BackupImportMode.REPLACE
+            )
+            assertEquals(false, repo.isAutoBackupPaused())
+            assertEquals(2, restored.tasks.size)
+            assertEquals(1, restored.focusRecords.size)
+            assertEquals(45, restored.settings.pomodoroMinutes)
+            assertEquals("#34A853", restored.settings.accentColorHex)
+            assertTrue(restored.settings.whitelistedPackages.contains("com.whatsapp"))
+        }
+    }
+
+    @Test
+    fun `full-state smart merge unions collections, resolves settings by timestamp, preserves streaks, and honors soft-delete tombstones`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        FocusRepository.resetStaticCacheForTests()
+        val repo = FocusRepository(context)
+        repo.clearLocalDeletedIds()
+        repo.setAutoBackupPaused(false)
+        repo.markStartFreshChosen(false)
+
+        kotlinx.coroutines.runBlocking {
+            val today = DateUtils.todayEpochDay()
+            val yesterday = today - 1L
+            val twoDaysAgo = today - 2L
+
+            val diskState = SeedData.createInitialState().copy(
+                tasks = listOf(
+                    TaskItem(
+                        id = "task_old_only",
+                        title = "Old Reinstall Task",
+                        updatedAtEpochMillis = 1_000L
+                    ),
+                    TaskItem(
+                        id = "task_conflict",
+                        title = "Older Conflict Title",
+                        isCompleted = false,
+                        updatedAtEpochMillis = 1_000L
+                    ),
+                    TaskItem(
+                        id = "task_to_delete",
+                        title = "Will Be Intentionally Deleted",
+                        updatedAtEpochMillis = 1_000L
+                    )
+                ),
+                projects = SeedData.createInitialState().projects + com.example.model.ProjectItem(
+                    id = "proj_old_custom",
+                    name = "Old Custom Project",
+                    updatedAt = 1_000L
+                ),
+                focusRecords = listOf(
+                    com.example.model.FocusRecord(
+                        id = "rec_day_1",
+                        taskTitle = "Day 1",
+                        startedAtEpochMillis = DateUtils.millisFromEpochDay(twoDaysAgo, 10, 0),
+                        durationMinutes = 30
+                    ),
+                    com.example.model.FocusRecord(
+                        id = "rec_day_2",
+                        taskTitle = "Day 2",
+                        startedAtEpochMillis = DateUtils.millisFromEpochDay(yesterday, 10, 0),
+                        durationMinutes = 40
+                    )
+                ),
+                forestState = com.example.model.ForestState(
+                    sunlightPoints = 900,
+                    currentGrowthMinutes = 45,
+                    unlockedSpecies = listOf(com.example.model.PlantSpecies.PINE, com.example.model.PlantSpecies.OAK),
+                    plantedHistory = listOf(
+                        com.example.model.PlantedTree(
+                            id = "tree_old_1",
+                            species = com.example.model.PlantSpecies.OAK,
+                            plantedAtEpochMillis = 1_000L,
+                            durationMinutes = 40
+                        )
+                    ),
+                    currentDailyStreak = 2,
+                    bestDailyStreak = 4
+                ),
+                settings = com.example.model.AppSettings(
+                    pomodoroMinutes = 50,
+                    shortBreakMinutes = 10,
+                    accentColorHex = "#8B5CF6",
+                    whitelistedPackages = listOf("com.old.allowed"),
+                    blockedPackages = listOf("com.old.blocked"),
+                    geminiModelId = "gemini-2.5-pro",
+                    geminiApiKey = "AIzaOldSavedKey",
+                    settingsUpdatedAt = 2_000L
+                )
+            )
+
+            val publicFile = repo.getPublicBackupFile()
+            publicFile.parentFile?.mkdirs()
+            publicFile.writeText(repo.exportJson(diskState), Charsets.UTF_8)
+
+            // Case 1: Fresh reinstall (deletedIds empty), user adds a new task & session with unmodified default settings
+            val liveAfterReinstall = SeedData.createInitialState().copy(
+                tasks = listOf(
+                    TaskItem(
+                        id = "task_new_only",
+                        title = "New Post-Reinstall Task",
+                        updatedAtEpochMillis = 3_000L
+                    ),
+                    TaskItem(
+                        id = "task_conflict",
+                        title = "Newer Conflict Title",
+                        isCompleted = true,
+                        updatedAtEpochMillis = 3_000L
+                    )
+                ),
+                projects = SeedData.createInitialState().projects + com.example.model.ProjectItem(
+                    id = "proj_new_custom",
+                    name = "New Custom Project",
+                    updatedAt = 3_000L
+                ),
+                focusRecords = listOf(
+                    com.example.model.FocusRecord(
+                        id = "rec_day_3",
+                        taskTitle = "Day 3",
+                        startedAtEpochMillis = DateUtils.millisFromEpochDay(today, 10, 0),
+                        durationMinutes = 25
+                    )
+                ),
+                forestState = com.example.model.ForestState(
+                    sunlightPoints = 250,
+                    currentGrowthMinutes = 25,
+                    unlockedSpecies = listOf(com.example.model.PlantSpecies.PINE),
+                    plantedHistory = listOf(
+                        com.example.model.PlantedTree(
+                            id = "tree_new_1",
+                            species = com.example.model.PlantSpecies.PINE,
+                            plantedAtEpochMillis = 3_000L,
+                            durationMinutes = 25
+                        )
+                    )
+                ),
+                // Default unmodified settings (settingsUpdatedAt == 0L) -> should inherit disk settings!
+                settings = com.example.model.AppSettings(
+                    whitelistedPackages = listOf("com.new.allowed"),
+                    blockedPackages = listOf("com.new.blocked"),
+                    settingsUpdatedAt = 0L
+                )
+            )
+
+            val mergedRes = repo.saveState(liveAfterReinstall)
+            assertTrue(mergedRes.isSuccess)
+            val merged = mergedRes.getOrNull()!!
+
+            // Union of tasks + conflict resolution by latest updatedAtEpochMillis
+            assertEquals(4, merged.tasks.size)
+            assertNotNull(merged.tasks.find { it.id == "task_old_only" })
+            assertNotNull(merged.tasks.find { it.id == "task_new_only" })
+            val resolvedConflict = merged.tasks.find { it.id == "task_conflict" }!!
+            assertEquals("Newer Conflict Title", resolvedConflict.title)
+            assertTrue(resolvedConflict.isCompleted)
+
+            // Union of projects
+            assertNotNull(merged.projects.find { it.id == "proj_old_custom" })
+            assertNotNull(merged.projects.find { it.id == "proj_new_custom" })
+
+            // Union of focus sessions -> total focus minutes never decreases (30 + 40 + 25 = 95)
+            assertEquals(3, merged.focusRecords.size)
+            assertEquals(95, merged.focusStats.totalFocusMinutes)
+
+            // Forest cumulative/max preservation & 3-day consecutive streak + preserved best streak (4)
+            assertEquals(900, merged.forestState.sunlightPoints)
+            assertEquals(2, merged.forestState.plantedHistory.size)
+            assertTrue(merged.forestState.unlockedSpecies.contains(com.example.model.PlantSpecies.OAK))
+            assertEquals(3, merged.forestState.currentDailyStreak)
+            assertEquals(4, merged.forestState.bestDailyStreak)
+
+            // Inherited settings from existing backup + unioned blocker lists
+            assertEquals(50, merged.settings.pomodoroMinutes)
+            assertEquals(10, merged.settings.shortBreakMinutes)
+            assertEquals("#8B5CF6", merged.settings.accentColorHex)
+            assertEquals("gemini-2.5-pro", merged.settings.geminiModelId)
+            assertEquals("AIzaOldSavedKey", merged.settings.geminiApiKey)
+            assertEquals(listOf("com.new.allowed", "com.old.allowed"), merged.settings.whitelistedPackages)
+            assertEquals(listOf("com.new.blocked", "com.old.blocked"), merged.settings.blockedPackages)
+
+            // Case 2: Intentional Deletion Tracking (Soft-Delete Tombstones) + newer user settings win
+            repo.recordDeletedIds(listOf("task_to_delete", "proj_old_custom", "rec_day_1"))
+            val afterDeleteState = merged.copy(
+                tasks = merged.tasks.filterNot { it.id == "task_to_delete" },
+                projects = merged.projects.filterNot { it.id == "proj_old_custom" },
+                focusRecords = merged.focusRecords.filterNot { it.id == "rec_day_1" },
+                pomodoroSessions = merged.pomodoroSessions.filterNot { it.id == "rec_day_1" },
+                settings = merged.settings.copy(
+                    pomodoroMinutes = 35,
+                    settingsUpdatedAt = 9_000L
+                )
+            )
+            val afterDeleteRes = repo.saveState(afterDeleteState)
+            assertTrue(afterDeleteRes.isSuccess)
+            val finalMerged = afterDeleteRes.getOrNull()!!
+
+            assertEquals(null, finalMerged.tasks.find { it.id == "task_to_delete" })
+            assertEquals(null, finalMerged.projects.find { it.id == "proj_old_custom" })
+            assertEquals(null, finalMerged.focusRecords.find { it.id == "rec_day_1" })
+            assertEquals(35, finalMerged.settings.pomodoroMinutes)
+
+            // Verify disk file itself has the exact same tombstoned + newer settings state with zero duplicates
+            val diskAfterDelete = repo.readExistingExternalBackup()!!
+            assertEquals(null, diskAfterDelete.tasks.find { it.id == "task_to_delete" })
+            assertEquals(35, diskAfterDelete.settings.pomodoroMinutes)
         }
     }
 

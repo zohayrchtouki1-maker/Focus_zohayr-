@@ -21,6 +21,7 @@ import com.example.model.AppSettings
 import com.example.model.FocusRecord
 import com.example.model.FolderItem
 import com.example.model.ManualBackupExportSummary
+import com.example.model.PendingBackupRestorePrompt
 import com.example.model.PersistedTimerState
 import com.example.model.PlantSpecies
 import com.example.model.PlantedTree
@@ -106,7 +107,9 @@ data class MainUiState(
     val permissionRequestTrigger: Int = 0,
     val statusBannerMessage: String? = null,
     val lastAutoBackupTimeMillis: Long = 0L,
-    val unreadBadges: UnreadBadgesState = UnreadBadgesState()
+    val unreadBadges: UnreadBadgesState = UnreadBadgesState(),
+    val showAllFilesAccessPrompt: Boolean = false,
+    val pendingAutoRestorePrompt: PendingBackupRestorePrompt? = null
 )
 
 class FocusTodoViewModel(application: Application) : AndroidViewModel(application), TomatoToolExecutor {
@@ -118,6 +121,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     private var timerJob: Job? = null
+    private var hasDismissedAllFilesPromptThisSession: Boolean = false
 
     init {
         FocusNotificationManager.ensureChannelsCreated(appContext)
@@ -130,10 +134,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         viewModelScope.launch {
-            val rawLoaded = repository.loadState()
-            val loaded = rawLoaded.copy(
-                settings = rawLoaded.settings.copy(darkTheme = true)
-            )
+            val loaded = repository.loadState()
             val defaultFocusSecs = loaded.settings.pomodoroMinutes * 60
             val restoredTimer = restorePersistedTimer(loaded.persistedTimer, defaultFocusSecs).let { t ->
                 t.copy(strictMode = t.strictMode || loaded.settings.strictBlockerEnabled)
@@ -141,10 +142,18 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             val permSnapshot = SystemPermissionsHelper.getSnapshot(appContext)
             val blockerPerms = StrictAppBlockerManager.getPermissionStatus(appContext)
             val shouldPromptOnLaunch = !permSnapshot.notificationsGranted
+            val shouldPromptAllFiles = !permSnapshot.allFilesAccessGranted && !hasDismissedAllFilesPromptThisSession
+            val pendingRestore = repository.checkFreshInstallExistingBackup(loaded)
 
             val lastAutoBackup = repository.getLastAutoBackupTimeMillis()
-            val savedGeminiKey = TomatoAiService.getSavedApiKey(appContext)
-            val savedGeminiModel = TomatoAiService.getSavedModel(appContext)
+            val savedGeminiKey = loaded.settings.geminiApiKey.ifBlank {
+                TomatoAiService.getSavedApiKey(appContext)
+            }
+            val savedGeminiModel = if (loaded.settings.geminiModelId.isNotBlank()) {
+                TomatoGeminiModel.fromModelId(loaded.settings.geminiModelId)
+            } else {
+                TomatoAiService.getSavedModel(appContext)
+            }
 
             _uiState.update {
                 it.copy(
@@ -156,7 +165,9 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     permissionRequestTrigger = if (shouldPromptOnLaunch) it.permissionRequestTrigger + 1 else it.permissionRequestTrigger,
                     lastAutoBackupTimeMillis = lastAutoBackup,
                     tomatoAiApiKey = savedGeminiKey,
-                    tomatoAiSelectedModel = savedGeminiModel
+                    tomatoAiSelectedModel = savedGeminiModel,
+                    showAllFilesAccessPrompt = shouldPromptAllFiles,
+                    pendingAutoRestorePrompt = pendingRestore
                 )
             }
             syncStrictBlockerTimerState()
@@ -256,17 +267,87 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     )
 
     private fun commitData(transform: (AppBackupState) -> AppBackupState) {
+        var snapshotToSave: AppBackupState? = null
         _uiState.update { state ->
             val nextData = transform(state.data).copy(
                 persistedTimer = state.timer.toPersisted()
             )
-            viewModelScope.launch {
-                repository.saveState(nextData)
-                val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
-                _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
-            }
+            snapshotToSave = nextData
             state.copy(data = nextData)
         }
+        val toSave = snapshotToSave ?: return
+        viewModelScope.launch {
+            val saveRes = repository.saveState(toSave)
+            val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
+            val mergedFromDisk = saveRes.getOrNull()
+            absorbMergedBackupStateIfExpanded(mergedFromDisk, updatedBackupTs)
+        }
+    }
+
+    private fun absorbMergedBackupStateIfExpanded(
+        mergedFromBackup: AppBackupState?,
+        updatedBackupTs: Long
+    ) {
+        if (mergedFromBackup == null) {
+            _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
+            return
+        }
+        val currentLive = _uiState.value.data
+        val hasExternalAdditions = hasExternalMergedChanges(currentLive, mergedFromBackup)
+        if (!hasExternalAdditions) {
+            _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
+            return
+        }
+
+        val combined = repository.mergeBackupStates(
+            current = currentLive,
+            imported = mergedFromBackup,
+            localDeletedIds = repository.getLocalDeletedIds()
+        )
+        val resolvedApiKey = combined.settings.geminiApiKey.ifBlank {
+            TomatoAiService.getSavedApiKey(appContext)
+        }
+        val resolvedModel = TomatoGeminiModel.fromModelId(combined.settings.geminiModelId)
+
+        _uiState.update { state ->
+            val updatedTimer = if (!state.timer.hasStarted && state.timer.phase == TimerPhase.FOCUS &&
+                state.data.settings.pomodoroMinutes != combined.settings.pomodoroMinutes
+            ) {
+                val secs = getFocusDurationSeconds(state.timer.activeTaskId, combined.settings)
+                state.timer.copy(totalPhaseSeconds = secs, remainingSeconds = secs)
+            } else {
+                state.timer
+            }
+            state.copy(
+                data = combined,
+                timer = updatedTimer,
+                tomatoAiApiKey = resolvedApiKey,
+                tomatoAiSelectedModel = resolvedModel,
+                lastAutoBackupTimeMillis = updatedBackupTs
+            )
+        }
+        StrictAppBlockerManager.setStrictBlockerEnabled(appContext, combined.settings.strictBlockerEnabled)
+        StrictAppBlockerManager.setWhitelistedPackages(appContext, combined.settings.whitelistedPackages.toSet())
+        syncStrictBlockerTimerState()
+        FocusNotificationManager.syncAllTaskReminders(appContext, combined.tasks, combined.settings)
+    }
+
+    private fun hasExternalMergedChanges(live: AppBackupState, merged: AppBackupState): Boolean {
+        if (merged.tasks.size != live.tasks.size ||
+            merged.projects.size != live.projects.size ||
+            merged.folders.size != live.folders.size ||
+            merged.tags.size != live.tags.size ||
+            merged.focusRecords.size != live.focusRecords.size ||
+            merged.forestState.plantedHistory.size != live.forestState.plantedHistory.size ||
+            merged.forestState.sunlightPoints != live.forestState.sunlightPoints ||
+            merged.forestState.bestDailyStreak != live.forestState.bestDailyStreak ||
+            merged.settings != live.settings
+        ) {
+            return true
+        }
+        val liveTaskIds = live.tasks.map { it.id to it.updatedAtEpochMillis }.toSet()
+        val mergedTaskIds = merged.tasks.map { it.id to it.updatedAtEpochMillis }.toSet()
+        return liveTaskIds != mergedTaskIds
     }
 
     private fun syncStrictBlockerTimerState() {
@@ -293,9 +374,9 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         }
         syncStrictBlockerTimerState()
         viewModelScope.launch {
-            repository.saveState(nextData)
+            val saveRes = repository.saveState(nextData)
             val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
-            _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
+            absorbMergedBackupStateIfExpanded(saveRes.getOrNull(), updatedBackupTs)
         }
     }
 
@@ -305,9 +386,27 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update {
             it.copy(
                 systemPermissions = snapshot,
-                strictBlockerPermissions = blockerPerms
+                strictBlockerPermissions = blockerPerms,
+                showAllFilesAccessPrompt = if (snapshot.allFilesAccessGranted) false else it.showAllFilesAccessPrompt
             )
         }
+    }
+
+    fun dismissAllFilesAccessPrompt() {
+        hasDismissedAllFilesPromptThisSession = true
+        _uiState.update { it.copy(showAllFilesAccessPrompt = false) }
+    }
+
+    fun confirmRestoreFoundBackup() {
+        val pending = _uiState.value.pendingAutoRestorePrompt ?: return
+        _uiState.update { it.copy(pendingAutoRestorePrompt = null) }
+        importBackupState(pending.backupState, BackupImportMode.REPLACE)
+    }
+
+    fun dismissFoundBackupAndStartFresh() {
+        repository.markStartFreshChosen(true)
+        repository.setAutoBackupPaused(false)
+        _uiState.update { it.copy(pendingAutoRestorePrompt = null) }
     }
 
     fun refreshStrictBlockerPermissions() {
@@ -327,6 +426,21 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         refreshSystemPermissions()
         reconcileRunningTimerWithTimestamp()
         checkAndRecordOverdueTasks(_uiState.value.data.tasks)
+
+        // When returning from All Files Access settings on a fresh empty install, immediately check for existing backup
+        if (_uiState.value.isLoaded &&
+            _uiState.value.pendingAutoRestorePrompt == null &&
+            _uiState.value.systemPermissions.allFilesAccessGranted &&
+            !repository.wasStartFreshChosen() &&
+            repository.isAppStateEffectivelyEmpty(_uiState.value.data)
+        ) {
+            viewModelScope.launch {
+                val found = repository.checkFreshInstallExistingBackup(_uiState.value.data)
+                if (found != null) {
+                    _uiState.update { it.copy(pendingAutoRestorePrompt = found) }
+                }
+            }
+        }
     }
 
     private fun checkAndRecordOverdueTasks(tasks: List<TaskItem>) {
@@ -484,11 +598,15 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             return
         }
         StrictAppBlockerManager.setStrictBlockerEnabled(appContext, enabled)
+        val now = System.currentTimeMillis()
         _uiState.update { state ->
             state.copy(
                 timer = state.timer.copy(strictMode = enabled),
                 data = state.data.copy(
-                    settings = state.data.settings.copy(strictBlockerEnabled = enabled)
+                    settings = state.data.settings.copy(
+                        strictBlockerEnabled = enabled,
+                        settingsUpdatedAt = now
+                    )
                 )
             )
         }
@@ -555,11 +673,13 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         var newlyCreatedRecurringTask: TaskItem? = null
 
         commitData { data ->
+            val now = System.currentTimeMillis()
             val updatedList = data.tasks.map { item ->
                 if (item.id == taskId) {
                     item.copy(
                         isCompleted = newCompleted,
-                        completedAtEpochMillis = if (newCompleted) System.currentTimeMillis() else null
+                        completedAtEpochMillis = if (newCompleted) now else null,
+                        updatedAtEpochMillis = now
                     )
                 } else item
             }.toMutableList()
@@ -627,6 +747,12 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun deleteTask(taskId: String) {
         FocusNotificationManager.cancelTaskReminder(appContext, taskId)
         UnreadBadgeTracker.clearTask(appContext, taskId)
+        val existingSubtaskIds = _uiState.value.data.tasks
+            .find { it.id == taskId }
+            ?.subtasks
+            ?.map { it.id }
+            .orEmpty()
+        repository.recordDeletedIds(listOf(taskId) + existingSubtaskIds)
         commitData { data ->
             data.copy(tasks = data.tasks.filterNot { it.id == taskId })
         }
@@ -640,31 +766,46 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun deleteFocusRecord(recordId: String) {
+        repository.recordDeletedIds(listOf(recordId))
+        commitData { data ->
+            data.copy(
+                focusRecords = data.focusRecords.filterNot { it.id == recordId },
+                pomodoroSessions = data.pomodoroSessions.filterNot { it.id == recordId }
+            )
+        }
+    }
+
     fun addSubtask(taskId: String, title: String) {
         val clean = title.trim()
         if (clean.isEmpty()) return
+        val now = System.currentTimeMillis()
         updateTask(taskId) { task ->
             task.copy(
                 subtasks = task.subtasks + SubtaskItem(
                     title = clean,
                     parentTaskId = taskId,
-                    sortOrder = task.subtasks.size
+                    sortOrder = task.subtasks.size,
+                    createdAt = now,
+                    updatedAt = now
                 )
             )
         }
     }
 
     fun toggleSubtask(taskId: String, subtaskId: String) {
+        val now = System.currentTimeMillis()
         updateTask(taskId) { task ->
             task.copy(
                 subtasks = task.subtasks.map { sub ->
-                    if (sub.id == subtaskId) sub.copy(isDone = !sub.isDone) else sub
+                    if (sub.id == subtaskId) sub.copy(isDone = !sub.isDone, updatedAt = now) else sub
                 }
             )
         }
     }
 
     fun deleteSubtask(taskId: String, subtaskId: String) {
+        repository.recordDeletedIds(listOf(subtaskId))
         updateTask(taskId) { task ->
             task.copy(subtasks = task.subtasks.filterNot { it.id == subtaskId })
         }
@@ -675,16 +816,18 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun addFolder(name: String) {
         val clean = name.trim()
         if (clean.isEmpty()) return
+        val now = System.currentTimeMillis()
         commitData { data ->
-            data.copy(folders = data.folders + FolderItem(name = clean))
+            data.copy(folders = data.folders + FolderItem(name = clean, createdAt = now, updatedAt = now))
         }
     }
 
     fun toggleFolderExpanded(folderId: String) {
+        val now = System.currentTimeMillis()
         commitData { data ->
             data.copy(
                 folders = data.folders.map {
-                    if (it.id == folderId) it.copy(isExpanded = !it.isExpanded) else it
+                    if (it.id == folderId) it.copy(isExpanded = !it.isExpanded, updatedAt = now) else it
                 }
             )
         }
@@ -693,21 +836,23 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun renameFolder(folderId: String, newName: String) {
         val clean = newName.trim()
         if (clean.isEmpty()) return
+        val now = System.currentTimeMillis()
         commitData { data ->
             data.copy(
                 folders = data.folders.map {
-                    if (it.id == folderId) it.copy(name = clean) else it
+                    if (it.id == folderId) it.copy(name = clean, updatedAt = now) else it
                 }
             )
         }
     }
 
     fun deleteFolder(folderId: String) {
+        repository.recordDeletedIds(listOf(folderId))
         commitData { data ->
             data.copy(
                 folders = data.folders.filterNot { it.id == folderId },
                 projects = data.projects.map {
-                    if (it.folderId == folderId) it.copy(folderId = null) else it
+                    if (it.folderId == folderId) it.copy(folderId = null, updatedAt = System.currentTimeMillis()) else it
                 }
             )
         }
@@ -742,21 +887,23 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun toggleArchiveProject(projectId: String) {
+        val now = System.currentTimeMillis()
         commitData { data ->
             data.copy(
                 projects = data.projects.map {
-                    if (it.id == projectId) it.copy(isArchived = !it.isArchived) else it
+                    if (it.id == projectId) it.copy(isArchived = !it.isArchived, updatedAt = now) else it
                 }
             )
         }
     }
 
     fun deleteProject(projectId: String) {
+        repository.recordDeletedIds(listOf(projectId))
         commitData { data ->
             data.copy(
                 projects = data.projects.filterNot { it.id == projectId },
                 tasks = data.tasks.map {
-                    if (it.projectId == projectId) it.copy(projectId = null) else it
+                    if (it.projectId == projectId) it.copy(projectId = null, updatedAtEpochMillis = System.currentTimeMillis()) else it
                 }
             )
         }
@@ -769,16 +916,23 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun addTag(name: String, colorHex: String) {
         val clean = name.trim().removePrefix("#")
         if (clean.isEmpty()) return
+        val now = System.currentTimeMillis()
         commitData { data ->
-            data.copy(tags = data.tags + TagItem(name = clean, colorHex = colorHex))
+            data.copy(tags = data.tags + TagItem(name = clean, colorHex = colorHex, updatedAt = now))
         }
     }
 
     fun deleteTag(tagId: String) {
+        repository.recordDeletedIds(listOf(tagId))
         commitData { data ->
             data.copy(
                 tags = data.tags.filterNot { it.id == tagId },
-                tasks = data.tasks.map { it.copy(tagIds = it.tagIds.filterNot { id -> id == tagId }) }
+                tasks = data.tasks.map {
+                    it.copy(
+                        tagIds = it.tagIds.filterNot { id -> id == tagId },
+                        updatedAtEpochMillis = System.currentTimeMillis()
+                    )
+                }
             )
         }
         val dest = _uiState.value.destination
@@ -1233,7 +1387,8 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                     if (item.id == taskId) {
                         item.copy(
                             completedPomodoros = if (incrementPomodoro) item.completedPomodoros + 1 else item.completedPomodoros,
-                            elapsedFocusMinutes = item.elapsedFocusMinutes + durationMinutes
+                            elapsedFocusMinutes = item.elapsedFocusMinutes + durationMinutes,
+                            updatedAtEpochMillis = now
                         )
                     } else item
                 }
@@ -1291,11 +1446,13 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 durationMinutes = mins
             )
             val updatedTasks = if (taskId != null) {
+                val nowMs = System.currentTimeMillis()
                 data.tasks.map {
                     if (it.id == taskId) {
                         it.copy(
                             elapsedFocusMinutes = it.elapsedFocusMinutes + mins,
-                            completedPomodoros = it.completedPomodoros + (mins / data.settings.pomodoroMinutes.coerceAtLeast(1))
+                            completedPomodoros = it.completedPomodoros + (mins / data.settings.pomodoroMinutes.coerceAtLeast(1)),
+                            updatedAtEpochMillis = nowMs
                         )
                     } else it
                 }
@@ -1361,8 +1518,9 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
         val prevSettings = _uiState.value.data.settings
+        val now = System.currentTimeMillis()
         commitData { data ->
-            data.copy(settings = transform(data.settings))
+            data.copy(settings = transform(data.settings).copy(settingsUpdatedAt = now))
         }
         val newSettings = _uiState.value.data.settings
         val timer = _uiState.value.timer
@@ -1450,7 +1608,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
                 Result.failure(e)
             }
             val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
-            _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
+            absorbMergedBackupStateIfExpanded(res.getOrNull()?.mergedState, updatedBackupTs)
             onResult(res)
         }
     }
@@ -1485,6 +1643,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             it.copy(
                 data = previewTarget,
                 selectedTaskId = null,
+                pendingAutoRestorePrompt = null,
                 timer = TimerUiState(
                     totalPhaseSeconds = secs,
                     remainingSeconds = secs
@@ -1499,15 +1658,26 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             )
             val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
             val restoredSecs = restored.settings.pomodoroMinutes * 60
+            val restoredApiKey = restored.settings.geminiApiKey.ifBlank {
+                TomatoAiService.getSavedApiKey(appContext)
+            }
+            val restoredModel = if (restored.settings.geminiModelId.isNotBlank()) {
+                TomatoGeminiModel.fromModelId(restored.settings.geminiModelId)
+            } else {
+                TomatoAiService.getSavedModel(appContext)
+            }
             _uiState.update {
                 it.copy(
                     data = restored,
                     selectedTaskId = null,
+                    pendingAutoRestorePrompt = null,
                     timer = TimerUiState(
                         totalPhaseSeconds = restoredSecs,
                         remainingSeconds = restoredSecs,
                         strictMode = restored.settings.strictBlockerEnabled
                     ),
+                    tomatoAiApiKey = restoredApiKey,
+                    tomatoAiSelectedModel = restoredModel,
                     lastAutoBackupTimeMillis = updatedBackupTs
                 )
             }
@@ -1524,6 +1694,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
         FocusNotificationManager.cancelOngoingTimerNotification(appContext)
         FocusNotificationManager.cancelExactTimerCompletionAlarm(appContext)
         UnreadBadgeTracker.resetAll(appContext)
+        repository.clearLocalDeletedIds()
 
         val demo = SeedData.createInitialState()
         val secs = demo.settings.pomodoroMinutes * 60
@@ -1539,7 +1710,7 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
         viewModelScope.launch {
-            repository.saveState(demo)
+            repository.saveState(demo, bypassExternalBackup = true)
             val updatedBackupTs = repository.getLastAutoBackupTimeMillis()
             _uiState.update { it.copy(lastAutoBackupTimeMillis = updatedBackupTs) }
         }
@@ -1568,15 +1739,30 @@ class FocusTodoViewModel(application: Application) : AndroidViewModel(applicatio
     fun saveTomatoAiApiKey(apiKey: String) {
         val clean = apiKey.trim()
         TomatoAiService.saveApiKey(appContext, clean)
+        val now = System.currentTimeMillis()
         _uiState.update { it.copy(tomatoAiApiKey = clean) }
-        // Trigger a state save so the API key in SharedPreferences is also included in local backup
-        commitData { it }
+        commitData { data ->
+            data.copy(
+                settings = data.settings.copy(
+                    geminiApiKey = clean,
+                    settingsUpdatedAt = now
+                )
+            )
+        }
     }
 
     fun selectTomatoAiModel(model: TomatoGeminiModel) {
         TomatoAiService.saveSelectedModel(appContext, model)
+        val now = System.currentTimeMillis()
         _uiState.update { it.copy(tomatoAiSelectedModel = model) }
-        commitData { it }
+        commitData { data ->
+            data.copy(
+                settings = data.settings.copy(
+                    geminiModelId = model.modelId,
+                    settingsUpdatedAt = now
+                )
+            )
+        }
     }
 
     fun clearTomatoAiChat() {

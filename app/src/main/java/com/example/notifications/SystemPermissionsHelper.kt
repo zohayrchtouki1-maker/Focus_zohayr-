@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
@@ -16,7 +17,8 @@ import androidx.core.content.ContextCompat
 data class SystemPermissionSnapshot(
     val notificationsGranted: Boolean = false,
     val exactAlarmsGranted: Boolean = true,
-    val ignoringBatteryOptimizations: Boolean = false
+    val ignoringBatteryOptimizations: Boolean = false,
+    val allFilesAccessGranted: Boolean = false
 )
 
 object SystemPermissionsHelper {
@@ -25,8 +27,45 @@ object SystemPermissionsHelper {
         return SystemPermissionSnapshot(
             notificationsGranted = isNotificationPermissionGranted(context),
             exactAlarmsGranted = isExactAlarmPermissionGranted(context),
-            ignoringBatteryOptimizations = isIgnoringBatteryOptimizations(context)
+            ignoringBatteryOptimizations = isIgnoringBatteryOptimizations(context),
+            allFilesAccessGranted = isAllFilesAccessGranted(context)
         )
+    }
+
+    fun isAllFilesAccessGranted(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                Environment.isExternalStorageManager()
+            } catch (_: Exception) {
+                false
+            }
+        } else {
+            val readGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+            val writeGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+            readGranted && writeGranted
+        }
+    }
+
+    fun openAllFilesAccessSettings(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val appIntent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                data = Uri.parse("package:${context.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (tryStartActivity(context, appIntent)) return
+
+            val allFilesIntent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (tryStartActivity(context, allFilesIntent)) return
+        }
+        openAppDetailsSettings(context)
     }
 
     fun isNotificationPermissionGranted(context: Context): Boolean {

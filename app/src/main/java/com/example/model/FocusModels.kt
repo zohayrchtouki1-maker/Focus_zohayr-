@@ -79,7 +79,8 @@ data class SubtaskItem(
     val isDone: Boolean = false,
     val parentTaskId: String? = null,
     val sortOrder: Int = 0,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = 0L
 )
 
 @JsonClass(generateAdapter = true)
@@ -89,7 +90,8 @@ data class ExportedSubtaskItem(
     val title: String,
     val isCompleted: Boolean,
     val sortOrder: Int = 0,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = 0L
 )
 
 @JsonClass(generateAdapter = true)
@@ -123,7 +125,8 @@ data class FolderItem(
     val name: String,
     val isExpanded: Boolean = true,
     val sortOrder: Int = 0,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = 0L
 )
 
 @JsonClass(generateAdapter = true)
@@ -144,7 +147,8 @@ data class ProjectItem(
 data class TagItem(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val colorHex: String = "#3B7BF6"
+    val colorHex: String = "#3B7BF6",
+    val updatedAt: Long = 0L
 )
 
 @JsonClass(generateAdapter = true)
@@ -201,7 +205,9 @@ data class ForestState(
     val currentGrowthMinutes: Int = 15,
     val activeSpecies: PlantSpecies = PlantSpecies.PINE,
     val unlockedSpecies: List<PlantSpecies> = listOf(PlantSpecies.PINE),
-    val plantedHistory: List<PlantedTree> = emptyList()
+    val plantedHistory: List<PlantedTree> = emptyList(),
+    val currentDailyStreak: Int = 0,
+    val bestDailyStreak: Int = 0
 )
 
 @JsonClass(generateAdapter = true)
@@ -236,16 +242,21 @@ data class AppSettings(
     val lockedInRecentsConfirmed: Boolean = false,
     val hasPromptedPermissionsOnLaunch: Boolean = false,
     val darkTheme: Boolean = true,
+    val accentColorHex: String = "#E05246",
     val language: AppLanguage = AppLanguage.AR,
     val whiteNoise: WhiteNoiseType = WhiteNoiseType.NONE,
     val whiteNoiseVolume: Float = 0.6f,
     val strictBlockerEnabled: Boolean = false,
-    val whitelistedPackages: List<String> = emptyList()
+    val whitelistedPackages: List<String> = emptyList(),
+    val blockedPackages: List<String> = emptyList(),
+    val geminiModelId: String = "gemini-2.5-flash",
+    val geminiApiKey: String = "",
+    val settingsUpdatedAt: Long = 0L
 )
 
 @JsonClass(generateAdapter = true)
 data class AppBackupState(
-    val backupVersion: Int = 3,
+    val backupVersion: Int = 4,
     val exportedAt: Long = System.currentTimeMillis(),
     val tasks: List<TaskItem> = emptyList(),
     val subtasks: List<ExportedSubtaskItem> = emptyList(),
@@ -258,7 +269,16 @@ data class AppBackupState(
     val settings: AppSettings = AppSettings(),
     val allPreferences: Map<String, List<ExportedPrefEntry>> = emptyMap(),
     val forestState: ForestState = ForestState(),
-    val persistedTimer: PersistedTimerState? = null
+    val persistedTimer: PersistedTimerState? = null,
+    val deletedIds: List<String> = emptyList()
+)
+
+data class PendingBackupRestorePrompt(
+    val backupState: AppBackupState,
+    val tasksCount: Int,
+    val sessionsCount: Int,
+    val projectsCount: Int,
+    val filePath: String
 )
 
 data class ManualBackupExportSummary(
@@ -270,5 +290,6 @@ data class ManualBackupExportSummary(
     val subtasksCount: Int,
     val pomodoroSessionsCount: Int,
     val totalPrefsCount: Int,
-    val updatedTimestamp: String = ""
+    val updatedTimestamp: String = "",
+    val mergedState: AppBackupState? = null
 )

@@ -708,7 +708,7 @@ object FocusNotificationManager {
 
         val title = "⚠️ تحذير هام ($step/$totalSteps): فشل حفظ النسخة الاحتياطية"
         val body = buildString {
-            append("تعذر حفظ النسخة الاحتياطية اليدوية في مجلد Documents/Focus_Zohayr.")
+            append("تعذر حفظ النسخة الاحتياطية اليدوية في مجلد Documents/FocusTomato.")
             if (errorReason.isNotBlank()) {
                 append(" ($errorReason)")
             }

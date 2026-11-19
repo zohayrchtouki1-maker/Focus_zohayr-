@@ -140,11 +140,11 @@ fun SettingsDialog(
     var showUserGuideDialog by remember { mutableStateOf(false) }
 
     fun trigger3xExportFailureWarning(reason: String) {
-        val cleanReason = reason.ifBlank { "تعذر الوصول إلى مجلد Documents/Focus_Zohayr" }
+        val cleanReason = reason.ifBlank { "تعذر الوصول إلى مجلد Documents/FocusTomato" }
         failureWarningReason = cleanReason
         failureWarningStep = 1
         backupIsError = true
-        backupFeedback = "فشل حفظ النسخة الاحتياطية في مجلد Documents/Focus_Zohayr ($cleanReason)"
+        backupFeedback = "فشل حفظ النسخة الاحتياطية في مجلد Documents/FocusTomato ($cleanReason)"
         FocusNotificationManager.showBackupWarningNotification(
             context = context,
             step = 1,
@@ -369,6 +369,15 @@ fun SettingsDialog(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            PermissionStatusRow(
+                                label = if (isArabic) "الوصول إلى جميع الملفات (للنسخ الدائم)" else "All Files Access (Persistent Backup)",
+                                isGranted = permSnapshot.allFilesAccessGranted,
+                                s = s,
+                                onClick = {
+                                    SystemPermissionsHelper.openAllFilesAccessSettings(context)
+                                }
+                            )
+
                             // 1. Manual Export Button (تصدير نسخة يدوية الآن)
                             Button(
                                 onClick = { triggerManualExportNow() },
@@ -699,6 +708,14 @@ fun SettingsDialog(
                                     s = s,
                                     onClick = {
                                         SystemPermissionsHelper.openIgnoreBatteryOptimizations(context)
+                                    }
+                                )
+                                PermissionStatusRow(
+                                    label = if (isArabic) "الوصول إلى جميع الملفات" else "All Files Access",
+                                    isGranted = permSnapshot.allFilesAccessGranted,
+                                    s = s,
+                                    onClick = {
+                                        SystemPermissionsHelper.openAllFilesAccessSettings(context)
                                     }
                                 )
 
@@ -1089,7 +1106,7 @@ fun SettingsDialog(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "تعذر حفظ النسخة الاحتياطية اليدوية في مجلد Documents/Focus_Zohayr!",
+                        text = "تعذر حفظ النسخة الاحتياطية اليدوية في مجلد Documents/FocusTomato!",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = DarkTextPrimary
